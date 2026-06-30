@@ -18,20 +18,21 @@ else
 fi
 
 # 2. NFS mount (files-01)
-FILES_01_IP="192.168.64.3"
-MOUNT_POINT="/mnt/platform-files"
-NFS_EXPORT="/srv/files"
+FILES_01_IP="${FILES_01_IP:-192.168.64.3}"
+MOUNT_POINT="${MOUNT_POINT:-/mnt/platform-files}"
+NFS_EXPORT="${NFS_EXPORT:-/srv/files}"
+NFS_MOUNT_OPTIONS="${NFS_MOUNT_OPTIONS:-defaults,_netdev,nfsvers=4.2,proto=tcp}"
 
 if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
     echo "[--] $MOUNT_POINT zaten mount edilmiş"
 else
     echo "[..] NFS mount yapılıyor: $FILES_01_IP:$NFS_EXPORT → $MOUNT_POINT"
     sudo mkdir -p "$MOUNT_POINT"
-    sudo mount -t nfs "$FILES_01_IP:$NFS_EXPORT" "$MOUNT_POINT"
+    sudo mount -t nfs -o "$NFS_MOUNT_OPTIONS" "$FILES_01_IP:$NFS_EXPORT" "$MOUNT_POINT"
     echo "[OK] NFS mount tamam"
 
     # fstab'a yoksa ekle
-    FSTAB_LINE="$FILES_01_IP:$NFS_EXPORT $MOUNT_POINT nfs defaults 0 0"
+    FSTAB_LINE="$FILES_01_IP:$NFS_EXPORT $MOUNT_POINT nfs $NFS_MOUNT_OPTIONS 0 0"
     if ! grep -qF "$FSTAB_LINE" /etc/fstab; then
         echo "$FSTAB_LINE" | sudo tee -a /etc/fstab > /dev/null
         echo "[OK] fstab'a eklendi (yeniden başlatmada otomatik mount)"

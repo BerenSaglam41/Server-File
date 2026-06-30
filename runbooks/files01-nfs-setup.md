@@ -3,6 +3,9 @@
 files-01 (192.168.64.3), tüm sisteme dosya depolama sağlayan NFS sunucusudur.
 Hem Mac hem API sunucusu (192.168.64.5) bu sunucuya bağlanır.
 
+> Bu runbook UTM/test kurulumunu anlatır. Production için geniş `*` export kullanılmaz;
+> production-hardening adımları için `runbooks/production-hardening.md` dosyasını izle.
+
 ---
 
 ## Kurulum (sıfırdan)
@@ -22,9 +25,11 @@ sudo mkdir -p /srv/files/staging/personnel
 sudo mkdir -p /srv/files/manifests/personnel
 sudo mkdir -p /srv/files/restore-tests/personnel
 
-# İzinler
+# Test izinleri
 sudo chmod -R 777 /srv/files
 ```
+
+Production'da `777` kullanılmaz. Hedef izin modeli `files01-nfs-model.md` içindeki sahiplik/izin tablosudur.
 
 ### 3. Health check probe
 
@@ -36,19 +41,35 @@ echo "probe" | sudo tee /srv/files/export/.probe > /dev/null
 
 ### 4. NFS export
 
+UTM/test profili:
+
 ```bash
 echo "/srv/files  *(rw,sync,no_subtree_check)" | sudo tee /etc/exports
 sudo exportfs -ra
 sudo systemctl enable --now nfs-server
 ```
 
+Production minimum profili:
+
+```bash
+API_SERVER_IP="<API_SERVER_IP>"
+echo "/srv/files  ${API_SERVER_IP}(rw,sync,no_subtree_check,root_squash)" | sudo tee /etc/exports
+sudo exportfs -ra
+sudo ufw allow from "$API_SERVER_IP" to any port 2049 proto tcp
+```
+
+Katı production modelinde export runtime için read-only olacak şekilde ayrı tasarlanır; detaylar `runbooks/production-hardening.md` içindedir.
+
 ### 5. Doğrula
 
 ```bash
 showmount -e localhost
-# Beklenen:
+# UTM/test beklenen:
 # Export list for localhost:
 # /srv/files  *
+#
+# Production beklenen:
+# /srv/files  <API_SERVER_IP>
 ```
 
 ---

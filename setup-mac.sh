@@ -18,16 +18,17 @@ else
 fi
 
 # 2. NFS mount (files-01)
-FILES_01_IP="192.168.64.3"
-MOUNT_POINT="/Volumes/platform-files"
-NFS_EXPORT="/srv/files"
+FILES_01_IP="${FILES_01_IP:-192.168.64.3}"
+MOUNT_POINT="${MOUNT_POINT:-/Volumes/platform-files}"
+NFS_EXPORT="${NFS_EXPORT:-/srv/files}"
+NFS_MOUNT_OPTIONS="${NFS_MOUNT_OPTIONS:-resvport,nfsvers=4.2,proto=tcp}"
 
 if mount | grep -q "$MOUNT_POINT"; then
     echo "[--] $MOUNT_POINT zaten mount edilmiş"
 else
     echo "[..] NFS mount yapılıyor: $FILES_01_IP:$NFS_EXPORT → $MOUNT_POINT"
     sudo mkdir -p "$MOUNT_POINT"
-    sudo mount -t nfs -o resvport "$FILES_01_IP:$NFS_EXPORT" "$MOUNT_POINT"
+    sudo mount -t nfs -o "$NFS_MOUNT_OPTIONS" "$FILES_01_IP:$NFS_EXPORT" "$MOUNT_POINT"
     echo "[OK] NFS mount tamam"
 fi
 
@@ -77,5 +78,5 @@ echo "=== Kurulum tamamlandı ==="
 echo "Tarayıcı: http://localhost:5090"
 echo ""
 echo "NOT: Mac yeniden başlatılırsa NFS mount kaybolur."
-echo "     Yeniden mount için: sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files"
+echo "     Yeniden mount için: sudo mount -t nfs -o $NFS_MOUNT_OPTIONS $FILES_01_IP:$NFS_EXPORT $MOUNT_POINT"
 echo "     Ardından: docker compose restart fileservice"

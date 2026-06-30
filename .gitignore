@@ -13,6 +13,7 @@ certs/*.p12
 certs/*.pfx
 
 # Docker volumes / test storage binary'leri
+backups/
 test-storage/export/
 test-storage/staging/
 test-storage/restore-tests/

@@ -16,6 +16,8 @@ Sistemde iki ayrı sunucu var:
 files-01, hem Mac hem API sunucusunun bağlandığı NFS depolama sunucusudur.  
 Sıfırdan kurulumu için bkz. `runbooks/files01-nfs-setup.md`
 
+> Aşağıdaki özet UTM/test profilidir. Production'da `*` ile NFS export açma; yalnız API sunucusu IP'sini allowlist et ve TCP/2049'u firewall ile sınırla. Ayrıntı: `runbooks/production-hardening.md`.
+
 ### Özet adımlar
 
 ```bash
@@ -31,17 +33,27 @@ sudo mkdir -p /srv/files/restore-tests/personnel
 # Health check probe dosyası (FileServiceApi için zorunlu)
 echo "probe" | sudo tee /srv/files/export/.probe > /dev/null
 
-# NFS export — tüm /srv/files dizini
+# NFS export — UTM/test profili
 echo "/srv/files  *(rw,sync,no_subtree_check)" | sudo tee /etc/exports
 sudo exportfs -ra
 sudo systemctl enable --now nfs-server
+```
+
+Production minimum örnek:
+
+```bash
+API_SERVER_IP="<API_SERVER_IP>"
+echo "/srv/files  ${API_SERVER_IP}(rw,sync,no_subtree_check,root_squash)" | sudo tee /etc/exports
+sudo exportfs -ra
+sudo ufw allow from "$API_SERVER_IP" to any port 2049 proto tcp
 ```
 
 ### Doğrula
 
 ```bash
 showmount -e localhost
-# Beklenen: /srv/files  *
+# UTM/test beklenen: /srv/files  *
+# Production beklenen: /srv/files  <API_SERVER_IP>
 ```
 
 ### Dizin yapısı
@@ -175,13 +187,21 @@ Gateway, HTTPS üzerinden çalışır. İki seçenek var:
 
 ### Seçenek A: Dahili / Geliştirme — Self-Signed Sertifika
 
-`certs/generate-certs.sh` gateway için otomatik sertifika üretir (setup scriptleri zaten bunu çalıştırır):
+`certs/generate-certs.sh` gateway için otomatik sertifika üretir (setup scriptleri zaten bunu çalıştırır). Script mevcut CA ve sertifikaları varsayılan olarak ezmez; yeniden üretmek için `FORCE_REGENERATE_CERTS=1` verilir.
 
 ```bash
 bash certs/generate-certs.sh
 ```
 
 Üretilen dosyalar: `certs/gateway.crt`, `certs/gateway.key`
+
+Gateway SAN değerleri ortam değişkenleriyle verilebilir:
+
+```bash
+GATEWAY_DNS="gateway,localhost,platform.sirket.com" \
+GATEWAY_IPS="127.0.0.1,<API_SERVER_IP>" \
+bash certs/generate-certs.sh
+```
 
 Container'lar başlatıldıktan sonra:
 
@@ -248,6 +268,8 @@ Ekle (alanları kendi değerlerinle değiştir):
 
 Let's Encrypt sertifikası 90 günde bir yenilenir; yukarıdaki cron her ay 1'inde kontrol eder.
 
+İç servis mTLS CA'sı ile public Gateway TLS sertifikasını ayrı düşün. Gateway public domain'de Let's Encrypt kullanabilir; FileService/YonetimApi/FlotaApi arası mTLS için platform CA korunur ve rotasyon `runbooks/production-hardening.md` prosedürüyle yapılır.
+
 **3. Doğrula:**
 
 ```bash
@@ -272,6 +294,20 @@ Container içi:  /app/storage             = mount noktası
   /app/storage/export    = ReadPath + ExportPath
   /app/storage/staging   = StagingPath
 ```
+
+---
+
+## Production Hardening Özeti
+
+Production'a geçmeden önce şu kapılar tamamlanmalı:
+
+- NFS export `*` içermemeli; yalnız API sunucusu IP'si allowlist edilmeli.
+- Files-01 firewall TCP/2049'u yalnız API sunucusuna açmalı.
+- `staging` geçici, `export` kalıcı/backup kapsamı olarak ayrılmalı.
+- `certs/generate-certs.sh` kazara CA yenilemeyecek şekilde kullanılmalı; CA rotasyonu planlı yapılmalı.
+- `appsettings.json` dosyalarındaki local değerlerin fallback olduğu bilinmeli; production config `docker compose config` ve container env çıktısıyla doğrulanmalı.
+
+Detaylı plan: `runbooks/production-hardening.md`
 
 ---
 

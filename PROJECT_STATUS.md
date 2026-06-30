@@ -499,7 +499,7 @@ Container `/app/storage` → Mac'te `/Volumes/platform-files`, API sunucusunda `
   restore-tests/     ← Restore test çıktıları (PII yazılmaz)
 ```
 
-**Dev ortamı istisnası:** Mevcut UTM kurulumunda `/srv/files` tamamı NFS üzerinden mount ediliyor (`192.168.64.3:/srv/files`), dolayısıyla `staging/` de NFS üzerinden erişilebilir. Bu durum `files01-nfs-kurulum-notlari.md`'de "eksik" olarak işaretlenmiş. Üretimde `staging/` Files-01 host'unda yerel kalmalı, NFS yalnız `export/`'u sunmalı; atomic `File.Move` aynı FS garantisini bu şekilde korur.
+**Staging notu:** Mevcut UTM/test kurulumunda `/srv/files` tamamı NFS üzerinden mount ediliyor (`192.168.64.3:/srv/files`), dolayısıyla `staging/` de NFS üzerinden erişilebilir. Production minimum profilde bu model yalnız API sunucusu IP allowlist + firewall ile daraltılır. Katı production profilinde ise FileService runtime export'u read-only görür; staging/publish işi ayrı kontrollü publisher/ops sürecine taşınır. Detay: `runbooks/production-hardening.md`.
 
 ## ReadPath / StagingPath / ExportPath Ayrımı (TAMAMLANDI ✅)
 
@@ -507,9 +507,9 @@ MD'lerin NFS read-only sınırına ve staging akışına uygun olarak `FileStora
 
 | Anahtar | Kullanım | Production değeri |
 |---|---|---|
-| `FileStorage:ReadPath` | Dosya okuma + health check probe | `/mnt/platform-files` (NFS ro mount) |
-| `FileStorage:StagingPath` | Upload ilk yazma — üretimde NFS dışı, dev'de NFS üzerinde (bkz. dev istisnası) | `/srv/files/staging` |
-| `FileStorage:ExportPath` | Atomic rename hedefi — kalıcı alan | `/srv/files/export` |
+| `FileStorage:ReadPath` | Dosya okuma + health check probe | Minimum prod: `/app/storage/export`; katı prod: NFS ro mount |
+| `FileStorage:StagingPath` | Upload ilk yazma | Minimum prod: `/app/storage/staging`; katı prod: publisher/ops süreci |
+| `FileStorage:ExportPath` | Atomic rename hedefi — kalıcı alan | Minimum prod: `/app/storage/export`; katı prod: publisher/ops süreci |
 
 `FileEndpoints.cs`:
 - `GetContentAsync` → `ReadPath`
@@ -522,16 +522,17 @@ Migration tool (`tools/migrate-legacy-files.py`):
 
 ## NFS Runbook (TAMAMLANDI ✅)
 
-`runbooks/files01-nfs-setup.md` oluşturuldu ve staging akışı yansıtacak şekilde güncellendi. İçerik:
+`runbooks/files01-nfs-setup.md` ve `runbooks/production-hardening.md` staging akışını iki seviyede anlatır. İçerik:
 - Files-01 tam dizin yapısı: `export/`, `staging/`, `manifests/`, `restore-tests/`
-- İzin modeli: `files-nfs-ro` (export, read-only), `files-publishers` (staging, manifests)
-- NFSv4.2 read-only export (`/etc/exports`) — **yalnız `export/` export edilir, `staging/` asla export edilmez**
+- UTM/test profili: `/srv/files *(rw,...)`
+- Production minimum profili: `/srv/files <API_SERVER_IP>(rw,...)` + firewall TCP/2049 only API host
+- Katı production profili: runtime export read-only, staging/publish ayrı controlled process
 - File-Service runtime mount (`/mnt/platform-files`, `/etc/fstab`)
 - Config: `ReadPath` / `StagingPath` / `ExportPath` production değerleri
 - Doğrulama kapıları: NFS port, mount, probe okuma, yazma reddi, API health check, NFS down senaryosu, backup restore
 - Sorun giderme tablosu
 
-NFS'e geçişte `appsettings.json` → `ReadPath: /mnt/platform-files`, `StagingPath: /srv/files/staging`, `ExportPath: /srv/files/export` yapılır.
+NFS'e geçişte container config compose env ile verilir. `appsettings.json` local fallback kabul edilir.
 
 ## Migration Tooling (TAMAMLANDI ✅)
 
@@ -1485,9 +1486,10 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
 
 ## SIRADAKİ ADIM
 
+- **Production hardening**: `runbooks/production-hardening.md` eklendi. NFS `*` export sadece UTM/test kabul edilir; prod minimumda `/srv/files <API_SERVER_IP>(rw,...)` ve firewall TCP/2049 allowlist gerekir. Katı modelde runtime export'u read-only, publish/staging ayrı kontrollü süreç olur.
 - **Backup + Restore**: `tools/backup-files01.sh` (rsync export/ + pg_dump) + `tools/restore-test.sh` (hash doğrulama). `restore-tests/` dizini boş.
 - **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
-- **Sertifika rotasyonu**: Prod'da cert süresi dolmadan yenileme prosedürü (sıfır kesinti için rolling restart). Mevcut certler 825 gün geçerli.
+- **Sertifika rotasyonu**: `certs/generate-certs.sh` artık mevcut CA/sertifikaları varsayılan olarak ezmez; `FORCE_REGENERATE_CERTS=1` bilinçli rotasyon içindir. Gateway SAN değerleri `GATEWAY_DNS`/`GATEWAY_IPS` ile parametrelenir. Prod'da CA rotasyonu ayrı prosedürle yapılmalı.
 - **Fleet vehicle araması**: FlotaApi'ye `GET /api/vehicles?search=` endpoint'i eklenirse Dashboard'a araç listesi sidebar'ı eklenebilir (şu an yoktur — V2 adayı).
 
 ## Bilinen tuzaklar
@@ -1499,3 +1501,5 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
 - `curl -I` HEAD isteği gönderir — GET endpoint'leri için 405 döner; içerik testlerinde
   `-X GET` veya `-v` kullan.
 - `yeni-test-cv.pdf` gerçek PDF değil. Upload testinde magic-byte hatası alırsın.
+- `runbooks/files01-nfs-setup.md` içindeki `*(rw)` NFS export örneği UTM/test içindir. Production'da `runbooks/production-hardening.md` kullanılmalı.
+- `appsettings.json` dosyalarındaki localhost/Mac path değerleri local fallback'tir; production davranışı compose environment değişkenleriyle doğrulanmalı.
