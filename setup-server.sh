@@ -38,15 +38,38 @@ else
     fi
 fi
 
-# 3. Docker container'ları kaldır
+# 3. mTLS sertifikaları — .key dosyaları gitignore'da; yoksa veya klasörse üret
+for KEY in certs/fileservice.key certs/yonetimapi.key certs/filoapi.key; do
+    if [ ! -f "$KEY" ]; then
+        echo "[..] Sertifikalar eksik/bozuk, yeniden üretiliyor..."
+        bash certs/generate-certs.sh
+        break
+    fi
+done
+echo "[OK] Sertifikalar hazır"
+
+# 4. Docker container'ları kaldır
 echo "[..] Docker container'ları rebuild ediliyor..."
 docker compose up --build -d
 echo "[OK] Container'lar ayakta"
 
-# 4. Fileservice NFS bağlantısını uygula (NFS container başladıktan sonra mount edildiyse)
+# 5. Fileservice NFS bağlantısını uygula (NFS container başladıktan sonra mount edildiyse)
 echo "[..] Fileservice yeniden başlatılıyor (NFS storage aktif)..."
 docker compose restart fileservice
 echo "[OK] Fileservice NFS ile çalışıyor"
+
+# 6. DB schema + seed (tablolar yoksa)
+echo "[..] Veritabanı schema kontrol ediliyor..."
+TABLE_COUNT=$(docker exec server-file-postgres-1 psql -U platform -d platformdb -tAc \
+    "SELECT COUNT(*) FROM pg_tables WHERE schemaname='yonetim';" 2>/dev/null || echo "0")
+if [ "$TABLE_COUNT" = "0" ]; then
+    echo "[..] Schema oluşturuluyor..."
+    docker exec -i server-file-postgres-1 psql -U platform -d platformdb < db/docker-init/01-schema.sql
+    docker exec -i server-file-postgres-1 psql -U platform -d platformdb < db/docker-init/02-seed.sql
+    echo "[OK] DB schema + seed tamamlandı"
+else
+    echo "[--] DB tablolar zaten var"
+fi
 
 echo ""
 echo "=== Kurulum tamamlandı ==="
