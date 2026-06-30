@@ -1,15 +1,18 @@
 # Kurulum Kılavuzu
 
 Bu kılavuz sistemi sıfırdan kurmak için gereken adımları içerir.  
-Üç senaryo var: **Mac geliştirme**, **Linux üretim sunucusu**, **Files-01 NFS sunucusu**.
+İki senaryo var: **Mac**, **Linux üretim sunucusu**. Her ikisi de aynı Files-01 NFS sunucusunu kullanır.
+
+> Files-01 NFS sunucusunun önce kurulmuş olması gerekir — bkz. [Files-01 Kurulumu](#files-01-nfs-sunucusu-kurulumu)
 
 ---
 
-## Mac'te Çalıştırma (Geliştirme)
+## Mac Kurulumu
 
 ### Ön koşullar
 - Docker Desktop kurulu ve çalışıyor
 - Git kurulu
+- Files-01 VM (192.168.64.3) erişilebilir durumda
 
 ### Adımlar
 
@@ -19,41 +22,52 @@ git clone <repo-url>
 cd dosya-sistemi-projesi
 ```
 
-**2. mTLS sertifikalarını üret** (`.key` dosyaları gitignore'da — repoda yok)
+**2. Kurulum scriptini çalıştır**
 ```bash
-bash certs/generate-certs.sh
+bash setup-mac.sh
 ```
 
-**3. `.env` dosyası oluştur**
-```bash
-echo "STORAGE_PATH=./test-storage" > .env
-```
+Bu script otomatik olarak şunları yapar:
+- `.env` dosyasını `.env.mac`'tan oluşturur (`STORAGE_PATH=/Volumes/platform-files`)
+- Files-01 NFS sunucusunu `/Volumes/platform-files`'a mount eder
+- `.key` sertifika dosyaları eksikse `generate-certs.sh` çalıştırır
+- `docker compose up --build -d`
+- `fileservice` container'ını yeniden başlatır (NFS timing)
+- DB schema ve seed SQL'lerini çalıştırır (tablolar yoksa)
 
-**4. Sistemi başlat**
-```bash
-docker compose up --build -d
-```
-
-**5. Doğrula**
+**3. Doğrula**
 ```bash
 curl http://localhost:5090/health
 # Beklenen: {"status":"healthy","service":"Gateway-Nginx"}
-
-curl -c /tmp/ck.txt -X POST http://localhost:5090/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"hr001","password":"Demo1234!"}'
-# Beklenen: 200 OK, at/rt cookie alınır
 ```
 
 Tarayıcıda: `http://localhost:5090`
+
+### İleride güncelleme yapmak
+
+```bash
+git pull
+bash setup-mac.sh
+```
+
+### Mac yeniden başlatıldığında
+
+macOS'ta NFS mount kalıcı değildir. Yeniden başlatma sonrası:
+
+```bash
+sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files
+docker compose restart fileservice
+```
+
+Ardından sistem kaldığı yerden devam eder (`docker compose up -d` gerekmez — container'lar Docker Desktop ile otomatik başlar).
 
 ### Mac'te gitignore nedeniyle repoda olmayan dosyalar
 
 | Dosya | Nasıl oluşturulur |
 |---|---|
-| `certs/*.key` | `bash certs/generate-certs.sh` |
-| `.env` | Yukarıdaki `echo` komutu |
-| DB verileri | Container ilk açılışta `db/docker-init/` SQL'lerini otomatik çalıştırır |
+| `certs/*.key` | `setup-mac.sh` → `generate-certs.sh` |
+| `.env` | `setup-mac.sh` → `.env.mac`'tan kopyalanır |
+| DB verileri | `setup-mac.sh` → `01-schema.sql` + `02-seed.sql` |
 
 ---
 
@@ -75,8 +89,6 @@ sudo apt install -y nfs-common
 # Git
 sudo apt install -y git
 ```
-
-### Files-01 NFS sunucusunun hazır olması gerekir (aşağıdaki bölüme bak)
 
 ### Adımlar
 
@@ -133,7 +145,7 @@ bash setup-server.sh
 
 ## Files-01 NFS Sunucusu Kurulumu
 
-Files-01 ayrı bir Ubuntu VM'dir. API sunucusundan bağımsız kurulur.
+Files-01 ayrı bir Ubuntu VM'dir (192.168.64.3). Hem Mac hem Linux bu sunucuya bağlanır.
 
 > Detaylı adımlar için: `runbooks/files01-nfs-setup.md`
 
@@ -162,7 +174,7 @@ echo "probe" | sudo tee /srv/files/export/.probe > /dev/null
 
 `/etc/exports` dosyasına ekle:
 ```
-/srv/files/export  <API-SUNUCU-IP>(ro,sync,no_subtree_check)
+/srv/files  *(rw,sync,no_subtree_check)
 ```
 
 Aktif et:
@@ -171,14 +183,10 @@ sudo exportfs -ra
 sudo systemctl enable --now nfs-server
 ```
 
-**5. API sunucusundan doğrula**
+**5. Doğrula**
 ```bash
-# API sunucusunda çalıştır:
-showmount -e <FILES-01-IP>
-# Beklenen: /srv/files/export   <API-SUNUCU-IP>
-
-mount | grep platform-files
-# Beklenen: <ip>:/srv/files/export on /mnt/platform-files type nfs ...
+showmount -e localhost
+# Beklenen: /srv/files  *
 ```
 
 ---
@@ -196,6 +204,21 @@ mount | grep platform-files
 | postgres | — | Veritabanı |
 
 Tüm servisler Docker iç ağında birbirine bağlıdır. Dışarıya sadece gateway (5090) açıktır.
+
+### Storage bağlantısı
+
+```
+Files-01 (192.168.64.3)
+  /srv/files
+      ├── export/        ← NFS üzerinden okunur (ReadPath + ExportPath)
+      │     └── .probe   ← health check
+      └── staging/       ← upload geçici alan (StagingPath)
+
+Mac:   /Volumes/platform-files  → NFS → /srv/files
+Linux: /mnt/platform-files      → NFS → /srv/files
+
+Her iki ortamda container içi path: /app/storage
+```
 
 ---
 
@@ -240,10 +263,21 @@ docker exec -i $(docker ps -qf name=postgres) psql -U platform -d platformdb < d
 docker exec -i $(docker ps -qf name=postgres) psql -U platform -d platformdb < db/docker-init/02-seed.sql
 ```
 
-**NFS dosyaları görünmüyor (Linux):**  
+**NFS dosyaları görünmüyor:**
 ```bash
-mountpoint -q /mnt/platform-files && echo "mount OK" || echo "MOUNT YOK"
-# Mount yoksa:
-sudo mount -t nfs <FILES-01-IP>:/srv/files/export /mnt/platform-files
+# Mac:
+mount | grep platform-files || echo "MOUNT YOK"
+sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files
 docker compose restart fileservice
+
+# Linux:
+mountpoint -q /mnt/platform-files && echo "mount OK" || echo "MOUNT YOK"
+sudo mount -t nfs 192.168.64.3:/srv/files /mnt/platform-files
+docker compose restart fileservice
+```
+
+**Files-01'e erişilemiyor:**
+```bash
+ping 192.168.64.3        # VM açık mı?
+showmount -e 192.168.64.3  # NFS server çalışıyor mu?
 ```
