@@ -130,28 +130,21 @@ services:
     networks:
       - platform-net
 
-  # ── Gateway ────────────────────────────────────────────────────────────────
+  # ── Gateway (Nginx) ────────────────────────────────────────────────────────
   gateway:
-    build:
-      context: ./Gateway
-      dockerfile: Dockerfile
-    environment:
-      ASPNETCORE_ENVIRONMENT: Production
-      ReverseProxy__Routes__yonetimapi-root-route__ClusterId: "yonetimapi-cluster"
-      ReverseProxy__Routes__yonetimapi-root-route__Match__Path: "/api/personnel"
-      ReverseProxy__Routes__yonetimapi-route__ClusterId: "yonetimapi-cluster"
-      ReverseProxy__Routes__yonetimapi-route__Match__Path: "/api/personnel/{**catch-all}"
-      ReverseProxy__Clusters__yonetimapi-cluster__Destinations__yonetimapi__Address: "http://yonetimapi:8080/"
-      ReverseProxy__Routes__flotaapi-root-route__ClusterId: "flotaapi-cluster"
-      ReverseProxy__Routes__flotaapi-root-route__Match__Path: "/api/vehicles"
-      ReverseProxy__Routes__flotaapi-route__ClusterId: "flotaapi-cluster"
-      ReverseProxy__Routes__flotaapi-route__Match__Path: "/api/vehicles/{**catch-all}"
-      ReverseProxy__Clusters__flotaapi-cluster__Destinations__flotaapi__Address: "http://flotaapi:8080/"
+    image: nginx:alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "5090:8080"
+      - "5090:80"
     depends_on:
       - yonetimapi
       - flotaapi
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - platform-net
 
@@ -162,7 +155,8 @@ networks:
 volumes:
   postgres_data:
 
-# .NET servisleri (FileServiceApi, YonetimApi, Gateway) artık container içinde çalışır.
+# Gateway: nginx:alpine — nginx/nginx.conf ile konfigüre edilir. Build adımı yok.
+# .NET servisleri (FileServiceApi, YonetimApi, FlotaApi) container içinde çalışır.
 # Keycloak: host localhost:8080 üzerinden erişilebilir (token alma).
 # Servisler arası iletişim: Docker network içinde servis adı ile (keycloak, fileservice, vb).
 # JWT issuer: localhost:8080 (token'daki iss claim) — MetadataAddress ile JWKS keycloak:8080'den çekilir.

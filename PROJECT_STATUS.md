@@ -377,15 +377,21 @@ Her endpoint için yazılan action'lar (PascalCase, `DomainAction(relationType, 
 
 `data_scope_denied` durumlarında da `result = denied, reason_code = data_scope_denied` yazılıyor. Audit hatası ana akışı engellemez (try/catch + log).
 
-## Gateway-01 (TAMAMLANDI ✅)
+## Gateway — Nginx (TAMAMLANDI ✅)
 
-YARP (Yet Another Reverse Proxy) tabanlı .NET gateway projesi eklendi.
+YARP (.NET) gateway, `nginx:alpine` imajıyla değiştirildi. Build adımı yok; `nginx/nginx.conf` mount edilerek çalışır.
 
-- Port `5090` — client entry point (5000 macOS AirPlay'e çakışıyor)
-- Route: `GET|POST /api/{**catch-all}` → YonetimApi `http://localhost:5076`
-- Health check: `GET /health` → `{ status: "healthy", service: "Gateway-01" }`
-- FileServiceApi (`5205`) ve YonetimApi (`5076`) production'da dışa kapalı tutulur; client yalnız `5090`'a erişir
-- Route ve cluster config `appsettings.json`'da — yeni uygulama eklenince buraya yeni route yazılır
+- Port `5090` — client entry point
+- `location /api/personnel` → `yonetimapi:8080`
+- `location /api/vehicles` → `flotaapi:8080`
+- `location = /health` → `{"status":"healthy","service":"Gateway-Nginx"}`
+- `location /internal/` → 404 (FileServiceApi iç endpoint'leri engellenir)
+- `location /` → 404 (tanımsız her route reddedilir)
+- `proxy_request_buffering off` + `proxy_buffering off` — dosya upload/download stream için
+- `client_max_body_size 20m/25m` — app policy limitine uygun
+- `proxy_http_version 1.1` — chunked transfer ve Range için
+
+`Gateway/` .NET projesi kaldırıldı.
 
 ## App İzolasyonu (TAMAMLANDI ✅)
 
