@@ -60,12 +60,13 @@ echo "[OK] Fileservice NFS ile çalışıyor"
 
 # 6. DB schema + seed (tablolar yoksa)
 echo "[..] Veritabanı schema kontrol ediliyor..."
-TABLE_COUNT=$(docker exec "$(docker ps -qf name=postgres)" psql -U platform -d platformdb -tAc \
+PG=$(docker compose ps -q postgres)
+TABLE_COUNT=$(docker exec "$PG" psql -U platform -d platformdb -tAc \
     "SELECT COUNT(*) FROM pg_tables WHERE schemaname='yonetim';" 2>/dev/null || echo "0")
 if [ "$TABLE_COUNT" = "0" ]; then
     echo "[..] Schema oluşturuluyor..."
-    docker exec -i "$(docker ps -qf name=postgres)" psql -U platform -d platformdb < db/docker-init/01-schema.sql
-    docker exec -i "$(docker ps -qf name=postgres)" psql -U platform -d platformdb < db/docker-init/02-seed.sql
+    docker exec -i "$PG" psql -U platform -d platformdb < db/docker-init/01-schema.sql
+    docker exec -i "$PG" psql -U platform -d platformdb < db/docker-init/02-seed.sql
     echo "[OK] DB schema + seed tamamlandı"
 else
     echo "[--] DB tablolar zaten var"
