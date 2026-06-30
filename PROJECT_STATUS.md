@@ -107,40 +107,40 @@ dosya-sistemi-projesi/
 
 ### Başlatma
 
-**Docker Compose (birincil):**
+**Linux Docker sunucusunda (birincil — production):**
 ```bash
+# İlk kurulum veya kod güncellemesi:
+git pull && bash setup-server.sh
+
+# Sadece rebuild:
 docker compose up --build -d
-docker compose ps   # tüm servisler healthy olana kadar bekle
 ```
 
-**Yerel geliştirme (ikincil — sadece FileServiceApi/YonetimApi geliştirirken):**
+Tarayıcı: `http://192.168.64.5:5090/`
+
+**Yerel Mac geliştirme (kod geliştirirken):**
 ```bash
-# Önce Postgres ve Keycloak Docker'da çalışıyor olmalı
-docker compose up -d postgres keycloak
+# Mac Docker: tüm servisler yerel çalışır
+docker compose up --build -d
 
-cd FileServiceApi && dotnet run --launch-profile http
-cd YonetimApi    && dotnet run --launch-profile http
-cd Gateway       && dotnet run --launch-profile http
+# Tarayıcı: http://localhost:5090/
 ```
-
-Client istekleri `http://localhost:5090/api/...` üzerinden gitmeli.
 
 ### Test için token alma
 
 ```bash
-# p001 token — claim yoksa YonetimApi preferred_username -> P001 fallback'i kullanır
-USER_TOKEN=$(curl -s -X POST http://localhost:8080/realms/platform/protocol/openid-connect/token \
-  -d grant_type=password -d client_id=frontend-test \
-  -d username=p001 -d password=Demo1234! | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+# BFF üzerinden login (cookie tabanlı — tarayıcıda oturum)
+# http://192.168.64.5:5090/ → hr001 / Demo1234!
 
-# Gateway üzerinden (doğru yol) → 200/404 (erişim var, dosya yoksa 404)
-curl -H "Authorization: Bearer $USER_TOKEN" http://localhost:5090/api/personnel/P001/cv
-
-# Başkasının personeline → 403 data_scope_denied
-curl -H "Authorization: Bearer $USER_TOKEN" http://localhost:5090/api/personnel/P002/cv
+# Curl ile direkt test (Linux sunucudan):
+curl -s -X POST http://192.168.64.5:5090/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"hr001","password":"Demo1234!"}' \
+  -c /tmp/ck.txt
+curl http://192.168.64.5:5090/api/personnel?search= -b /tmp/ck.txt
 
 # Gateway health check
-curl http://localhost:5090/health
+curl http://192.168.64.5:5090/health
 ```
 
 ## FileServiceApi — 7 endpoint (tümü test edildi)
@@ -415,7 +415,7 @@ YARP (.NET) gateway, `nginx:alpine` imajıyla değiştirildi. Build adımı yok;
 - `location /api/vehicles` → `flotaapi:8080`
 - `location = /health` → `{"status":"healthy","service":"Gateway-Nginx"}`
 - `location /internal/` → 404 (FileServiceApi iç endpoint'leri engellenir)
-- `location /` → 404 (tanımsız her route reddedilir)
+- `location /` → React SPA (client container nginx:80 proxy)
 - `proxy_request_buffering off` + `proxy_buffering off` — dosya upload/download stream için
 - `client_max_body_size 20m/25m` — app policy limitine uygun
 - `proxy_http_version 1.1` — chunked transfer ve Range için
@@ -1342,12 +1342,81 @@ npm run dev -- --host
 
 Mac Docker'da YonetimApi `keycloak:8080`'i çağırdığında token `iss=keycloak:8080` dönebiliyordu ama `ValidIssuers=["localhost:8080"]` bekleniyordu → 401. `KC_HOSTNAME=localhost` ile Keycloak her ortamda aynı issuer'ı üretir.
 
+## Linux Docker Üretim Kurulumu (TAMAMLANDI ✅ — 2026-06-30)
+
+Tüm sistem Mac'teki geliştirme ortamından çıktı; UTM üzerinde çalışan Linux Docker sunucusuna taşındı.
+
+### Topoloji
+
+```
+Mac (tarayıcı)  ──http://192.168.64.5:5090──▶  UTM Linux Docker (192.168.64.5)
+                                                    ├─ gateway (nginx) :5090
+                                                    ├─ client (nginx SPA) :80 (iç)
+                                                    ├─ yonetimapi :8080 (iç)
+                                                    ├─ fileservice :8080 (iç, mTLS)
+                                                    ├─ keycloak :8080
+                                                    └─ postgres
+                                                           │
+                                                    NFS mount ▼
+                                              UTM files-01 (192.168.64.3)
+                                                    /srv/files → /mnt/platform-files
+```
+
+**Artık Mac'te hiçbir şey çalışmıyor.** Tarayıcı `http://192.168.64.5:5090/` ile doğrudan sunucuya bağlanır.
+
+### Frontend Production Packaging (TAMAMLANDI ✅)
+
+React SPA artık Docker container içinde çalışıyor:
+
+- `client/Dockerfile` — multi-stage: `node:20-alpine` build → `nginx:alpine` serve
+- `client/nginx-spa.conf` — SPA nginx config (`try_files $uri $uri/ /index.html`)
+- `nginx/Dockerfile` — gateway nginx artık image değil build tabanlı (nginx.conf değişince rebuild zorunlu)
+- `docker-compose.yml` — `client` servisi eklendi; gateway `location /` → client:80 proxy
+
+### JWKS Backchannel Handler (TAMAMLANDI ✅)
+
+`KC_HOSTNAME=localhost` nedeniyle OIDC discovery'deki `jwks_uri` `localhost:8080` döner. Container içinden `localhost:8080` Keycloak değildir → "signature key not found" → 401.
+
+- `YonetimApi/Infrastructure/KeycloakBackchannelHandler.cs` — JWT Bearer middleware'in backchannel isteklerinde `localhost:8080 → keycloak:8080` yönlendirir
+- `FileServiceApi/Infrastructure/KeycloakBackchannelHandler.cs` — aynı handler
+- Her iki `Program.cs`'de `options.BackchannelHttpHandler = new KeycloakBackchannelHandler()` eklendi
+
+### setup-server.sh Otomasyonu
+
+`bash setup-server.sh` komutu git pull sonrasında şunları yapar:
+
+1. `.env` yoksa `.env.linux`'tan kopyalar
+2. NFS mount yoksa `192.168.64.3:/srv/files → /mnt/platform-files` mount eder + `/etc/fstab`'a ekler
+3. `certs/*.key` dosyaları eksikse/klasörse `generate-certs.sh` çalıştırır
+4. `docker compose up --build -d`
+5. `docker compose restart fileservice` (NFS mount sırası için)
+6. DB tablolar yoksa `01-schema.sql` + `02-seed.sql` çalıştırır
+
+### Linux Sunucusu İlk Kurulum
+
+```bash
+# Bir kere:
+bash setup-server.sh
+
+# Kod güncellemesi:
+git pull && bash setup-server.sh
+
+# Ya da sadece container rebuild:
+docker compose up --build -d
+```
+
+### Bilinen Kısıtlar
+
+- **Telefon erişimi**: UTM sanal ağı (192.168.64.x) yalnızca Mac'ten erişilebilir. Telefon bu ağı göremez — bu UTM ağ mimarisi sınırlamasıdır. Telefondan erişim için ya UTM bridged networking (aynı WiFi) ya da ngrok/Tailscale gibi tünel servisi gerekir.
+- **DB seed**: `docker compose down -v` sonrasında postgres volume sıfırlanır; `setup-server.sh` ile veya `docker exec -i server-file-postgres-1 psql ... < 01-schema.sql && 02-seed.sql` ile yeniden çalıştır.
+- **NFS kalıcılığı**: Sunucu reboot'ta NFS mount kaybolabilir. `setup-server.sh` her çalışmada mount'u kontrol eder. fstab'a eklenmişse otomatik olur.
+
 ## SIRADAKİ ADIM
 
-- **Linux sunucuda test**: `docker compose up --build -d` → Mac'ten Vite → 192.168.64.5 → API çağrıları
-- **V2 Download Ticket**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
-- **Sertifika rotasyonu**: Prod'da cert süresi dolmadan yenileme prosedürü (sıfır kesinti için rolling restart).
-- **Frontend production packaging**: Client için Nginx/static hosting imajı ve compose servisi eklenecekse ayrı teslim kalemi olarak yapılmalı.
+- **Henüz push edilmeyen commit'ler**: `JWKS backchannel handler`, `gateway Dockerfile`, `setup-server.sh` güncellemeleri commit edildi ama push edilmedi. `git push origin main` + Linux'ta `git pull && docker compose up --build yonetimapi fileservice -d` ile tamamlanacak.
+- **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
+- **Sertifika rotasyonu**: Prod'da cert süresi dolmadan yenileme prosedürü (sıfır kesinti için rolling restart). Mevcut certler 825 gün geçerli.
+- **Keycloak admin güvenliği**: `/admin` konsolunu dış erişime kapatmak (firewall veya KC config).
 
 ## Bilinen tuzaklar
 
