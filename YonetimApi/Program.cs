@@ -69,7 +69,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = false,
             // MetadataAddress keycloak:8080'den keycloak:8080/... issuer döndürür;
             // token ise localhost:8080 ile basılmıştır. İkisi de geçerli olsun.
-            ValidIssuers = new[] { authority },
+            // Linux Docker'da token iss=keycloak:8080 olabilir; Mac Docker'da localhost:8080.
+            ValidIssuers = new[] { authority, "http://keycloak:8080/realms/platform" },
         };
         // BFF: token önce "at" cookie'sinden okunur; curl testleri için header da desteklenir.
         options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents

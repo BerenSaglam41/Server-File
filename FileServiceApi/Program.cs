@@ -63,7 +63,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateAudience = false,
-            ValidIssuers = new[] { authority },
+            // Linux Docker'da token iss=keycloak:8080 olabilir; Mac Docker'da localhost:8080.
+            ValidIssuers = new[] { authority, "http://keycloak:8080/realms/platform" },
         };
     });
 
