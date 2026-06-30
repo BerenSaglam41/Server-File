@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Npgsql;
 using System.Security.Cryptography.X509Certificates;
 using YonetimApi.Endpoints;
+using YonetimApi.Infrastructure;
 using YonetimApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -59,17 +60,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     {
         var authority = builder.Configuration["Keycloak:Authority"]!;
         options.Authority = authority;
-        // Docker'da JWKS keycloak:8080'den çekilir ama issuer localhost:8080 kalır.
         options.MetadataAddress = builder.Configuration["Keycloak:MetadataAddress"]
             ?? $"{authority}/.well-known/openid-configuration";
         options.RequireHttpsMetadata = builder.Configuration.GetValue<bool>("Keycloak:RequireHttpsMetadata");
         options.MapInboundClaims = false;
+        // KC_HOSTNAME=localhost → jwks_uri localhost:8080 döner ama container içinden ulaşılamaz.
+        // Bu handler localhost:8080 → keycloak:8080 yönlendirir.
+        options.BackchannelHttpHandler = new KeycloakBackchannelHandler();
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateAudience = false,
-            // MetadataAddress keycloak:8080'den keycloak:8080/... issuer döndürür;
-            // token ise localhost:8080 ile basılmıştır. İkisi de geçerli olsun.
-            // Linux Docker'da token iss=keycloak:8080 olabilir; Mac Docker'da localhost:8080.
             ValidIssuers = new[] { authority, "http://keycloak:8080/realms/platform" },
         };
         // BFF: token önce "at" cookie'sinden okunur; curl testleri için header da desteklenir.

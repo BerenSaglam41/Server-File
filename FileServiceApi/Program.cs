@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography.X509Certificates;
 using FileServiceApi.Data;
+using FileServiceApi.Infrastructure;
 using FileServiceApi.Services;
 using FileServiceApi.Endpoints;
 
@@ -60,10 +61,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.MetadataAddress = builder.Configuration["Keycloak:MetadataAddress"]
             ?? $"{authority}/.well-known/openid-configuration";
         options.RequireHttpsMetadata = builder.Configuration.GetValue<bool>("Keycloak:RequireHttpsMetadata");
+        // KC_HOSTNAME=localhost → jwks_uri localhost:8080 döner ama container içinden ulaşılamaz.
+        options.BackchannelHttpHandler = new KeycloakBackchannelHandler();
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateAudience = false,
-            // Linux Docker'da token iss=keycloak:8080 olabilir; Mac Docker'da localhost:8080.
             ValidIssuers = new[] { authority, "http://keycloak:8080/realms/platform" },
         };
     });
