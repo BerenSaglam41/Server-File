@@ -1274,9 +1274,77 @@ LIMIT 5;
 ```
 `actor_ip` sütununda telefonun gerçek IP adresi görülmeli.
 
+## Çoklu Ortam Desteği — Mac + UTM Linux (TAMAMLANDI ✅ — 2026-06-30)
+
+### Topoloji
+
+```
+Mac (geliştirme)
+  └─ Vite dev server :5173  ─proxy→  UTM Linux Docker :5090 (nginx gateway)
+                                          ├─ yonetimapi
+                                          ├─ fileservice
+                                          ├─ keycloak :8080
+                                          └─ postgres
+UTM Linux files-01 (192.168.64.3)
+  └─ NFS /srv/files  ─mount→  /mnt/platform-files  (UTM Linux Docker sunucusunda)
+```
+
+### Yapılan değişiklikler
+
+**`client/vite.config.ts`** — `API_TARGET` env variable ile proxy hedefi değiştirilebilir:
+```ts
+const apiTarget = env.API_TARGET ?? 'http://localhost:5090'
+```
+- Yerel Docker: varsayılan (`localhost:5090`)
+- UTM Linux Docker: `client/.env.local` dosyasına `API_TARGET=http://192.168.64.5:5090`
+
+**`docker-compose.yml`** — iki fix:
+1. Keycloak `KC_HOSTNAME=localhost` → Mac/Linux Docker fark etmeksizin token `iss` claim'i sabit `localhost:8080`
+2. `STORAGE_PATH` env variable → Linux'ta NFS mount path farklı olabilir
+
+**`client/.env.local`** (gitignore'da):
+```
+API_TARGET=http://192.168.64.5:5090
+```
+
+**`.env.linux`** (Linux sunucuda `cp .env.linux .env` ile kullanılır):
+```
+STORAGE_PATH=/mnt/platform-files
+```
+
+### Linux Docker sunucusunda ilk kurulum
+
+```bash
+# 1. NFS mount (files-01'den)
+sudo mkdir -p /mnt/platform-files
+sudo mount -t nfs 192.168.64.3:/srv/files /mnt/platform-files
+# (kalıcı için /etc/fstab'a ekle)
+
+# 2. Storage ortam değişkeni
+cp .env.linux .env
+
+# 3. Container'ları ayağa kaldır
+docker compose up --build -d
+docker compose ps   # tüm servisler healthy olana kadar
+```
+
+### Mac'te geliştirme başlatma
+
+```bash
+cd client
+# .env.local zaten API_TARGET=http://192.168.64.5:5090 içeriyor
+npm run dev -- --host
+# → http://localhost:5173  (Mac'te tarayıcı)
+# → http://<mac-ip>:5173   (telefon veya başka cihaz)
+```
+
+### Neden KC_HOSTNAME gerekti?
+
+Mac Docker'da YonetimApi `keycloak:8080`'i çağırdığında token `iss=keycloak:8080` dönebiliyordu ama `ValidIssuers=["localhost:8080"]` bekleniyordu → 401. `KC_HOSTNAME=localhost` ile Keycloak her ortamda aynı issuer'ı üretir.
+
 ## SIRADAKİ ADIM
 
-- **Container rebuild ve test**: `docker compose up --build -d` → telefondan dosya yükle → audit tablosunda `actor_ip` kontrol et.
+- **Linux sunucuda test**: `docker compose up --build -d` → Mac'ten Vite → 192.168.64.5 → API çağrıları
 - **V2 Download Ticket**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
 - **Sertifika rotasyonu**: Prod'da cert süresi dolmadan yenileme prosedürü (sıfır kesinti için rolling restart).
 - **Frontend production packaging**: Client için Nginx/static hosting imajı ve compose servisi eklenecekse ayrı teslim kalemi olarak yapılmalı.

@@ -25,6 +25,12 @@ services:
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      # KC_HOSTNAME: token'lardaki iss claim'ini sabitler → localhost:8080
+      # Mac ve Linux Docker arasında tutarlı issuer sağlar
+      # MetadataAddress zaten keycloak:8080'i kullanıyor (iç DNS), bu değişmez
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8080"
+      KC_HOSTNAME_STRICT: "false"
     volumes:
       - ./keycloak/realm-platform.json:/opt/keycloak/data/import/realm-platform.json
     ports:
@@ -58,7 +64,7 @@ services:
       Mtls__AllowedClientCNs__0: "yonetimapi"
       Mtls__AllowedClientCNs__1: "filoapi"
     volumes:
-      - /Volumes/platform-files:/app/storage
+      - ${STORAGE_PATH:-/Volumes/platform-files}:/app/storage
       - ./certs/fileservice.crt:/certs/fileservice.crt:ro
       - ./certs/fileservice.key:/certs/fileservice.key:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
