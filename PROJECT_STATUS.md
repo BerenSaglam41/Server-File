@@ -29,7 +29,7 @@ bu kararları tartışmaya açmaz:
 Client -> Gateway-01 -> YonetimAPI -> File-Service API -> DB-01 (files.* şeması) -> Files-01 (storage)
 ```
 
-- **Files-01**: sadece binary depolama. Gerçek ortamda NFS, test ortamında düz klasör (`test-storage/export/`).
+- **files-01** (192.168.64.3): sadece binary depolama — NFS üzerinden `/srv/files` export eder.
 - **DB-01 / `files.*` şeması**: merkezi dosya kataloğu. 4 tablo: `objects`, `references`, `app_policies`, `audit_events`.
 - **File-Service API**: dosya kataloğunun tek sahibi. Policy kontrolü, audit, stream — hepsi burada.
 - **YonetimAPI**: ilk consumer uygulama. Data-scope kontrolü yapar, FileService'i kendi servis kimliğiyle çağırır.
@@ -100,34 +100,24 @@ dosya-sistemi-projesi/
   │     └── Endpoints/VehicleEndpoints.cs
   │     ├── Program.cs                 <- mTLS HttpClient (filoapi cert)
   │     └── appsettings.json
-  └── test-storage/                    <- Files-01 local simülasyonu
-        ├── export/                    ← ReadPath + ExportPath
-        │     └── .probe               ← health check probe
-        ├── staging/                   ← StagingPath (upload geçici alan)
-        ├── manifests/                 ← migration manifestleri
-        └── restore-tests/             ← restore test çıktıları
+  └── test-storage/                    <- (eski — artık kullanılmıyor, NFS'e geçildi)
 ```
 
 ### Başlatma
 
-**Linux Docker sunucusunda (birincil — production):**
+**API sunucusunda (192.168.64.5):**
 ```bash
-# İlk kurulum veya kod güncellemesi:
 git pull && bash setup-server.sh
-
-# Sadece rebuild:
-docker compose up --build -d
 ```
-
 Tarayıcı: `http://192.168.64.5:5090/`
 
-**Yerel Mac geliştirme (kod geliştirirken):**
+**Mac'te:**
 ```bash
-# Mac Docker: tüm servisler yerel çalışır
-docker compose up --build -d
-
-# Tarayıcı: http://localhost:5090/
+git pull && bash setup-mac.sh
 ```
+Tarayıcı: `http://localhost:5090/`
+
+Detaylı kurulum adımları: `KURULUM.md`
 
 ### Test için token alma
 
@@ -360,19 +350,16 @@ Client ─(user JWT)──▶ Gateway ──▶ YonetimApi ─(service JWT + cli
 
 ## Files-01 NFS Entegrasyonu (TAMAMLANDI ✅)
 
-UTM Ubuntu VM, Files-01 (gerçek NFS sunucusu) olarak yapılandırıldı. Mac üzerindeki Docker servisleri artık `test-storage/` yerine NFS üzerinden dosya okuma/yazma yapıyor.
+files-01 (192.168.64.3), NFS sunucusu olarak yapılandırıldı. Mac ve API sunucusu aynı files-01'e bağlanır.
 
 **Topoloji:**
-- Ubuntu VM IP: `192.168.64.3` — NFS server (`/srv/files` export)
-- Mac: `/Volumes/platform-files` → NFS mount → Docker container `/app/storage`
+- **files-01** (192.168.64.3): NFS sunucusu — `/srv/files` export eder
+- **Mac**: `/Volumes/platform-files` → NFS → `/srv/files`
+- **API sunucusu** (192.168.64.5): `/mnt/platform-files` → NFS → `/srv/files`
+- Container içi: `/app/storage` → host mount noktası → `/srv/files`
 
-**Yapılan değişiklikler:**
-- `docker-compose.yml`: `./test-storage` → `/Volumes/platform-files`
-- `FileServiceApi/appsettings.json`: tüm path'ler `/Volumes/platform-files/...`
-
-**Bilinen kısıtlar (dev ortamı):**
-- `/Volumes/platform-files` mount Mac reboot'ta kaybolur — `sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files` ile yeniden mount gerekir
-- Ubuntu'da `chmod -R 777 /srv/files` uygulandı (üretimde grup modeli kullanılacak)
+**Bilinen kısıt:**
+- Mac'te NFS mount reboot'ta kaybolur — `sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files && docker compose restart fileservice` ile yeniden bağla
 
 Detay: `runbooks/files01-nfs-kurulum-notlari.md`
 
@@ -411,7 +398,7 @@ Her endpoint için yazılan action'lar (PascalCase, `DomainAction(relationType, 
 
 ## Gateway — Nginx (TAMAMLANDI ✅)
 
-YARP (.NET) gateway, `nginx:alpine` imajıyla değiştirildi. Build adımı yok; `nginx/nginx.conf` mount edilerek çalışır.
+Gateway, `nginx:alpine` imaj tabanlı build olarak çalışır (`nginx/Dockerfile`). `nginx.conf` container içine kopyalanır.
 
 - Port `5090` — client entry point
 - `location /api/personnel` → `yonetimapi:8080`
@@ -487,7 +474,7 @@ Test: H1 (normal → 200) ✅, H2 (storage down → 503) ✅, H3 (restore → 20
 `file-service-api-contract.md` adım 5 — *"Binary Files-01 staging/export akışıyla yazılır"* tam olarak uygulandı.
 
 **Upload akışı (`FileEndpoints.cs → CreateFileAsync`):**
-1. Binary `StagingPath`'e yazılır (`/srv/files/staging` veya test: `test-storage/staging`).
+1. Binary `StagingPath`'e yazılır (`/app/storage/staging` → files-01 `/srv/files/staging`).
 2. SHA256, staging dosyasından hesaplanır (disk write bütünlüğü de doğrulanır).
 3. `File.Move` ile staging → export atomic rename (aynı FS → rename).
 4. DB kayıtları oluşur (`files.objects` + `files.references`).
@@ -497,9 +484,11 @@ Test: H1 (normal → 200) ✅, H2 (storage down → 503) ✅, H3 (restore → 20
 
 | Anahtar | Dev (UTM NFS) değeri | Production hedefi |
 |---|---|---|
-| `FileStorage:ReadPath` | `/Volumes/platform-files/export` | `/mnt/platform-files` (NFS ro mount) |
-| `FileStorage:StagingPath` | `/Volumes/platform-files/staging` | `/srv/files/staging` (Files-01 yerel) |
-| `FileStorage:ExportPath` | `/Volumes/platform-files/export` | `/srv/files/export` |
+| `FileStorage:ReadPath` | `/app/storage/export` | `/app/storage/export` |
+| `FileStorage:StagingPath` | `/app/storage/staging` | `/app/storage/staging` |
+| `FileStorage:ExportPath` | `/app/storage/export` | `/app/storage/export` |
+
+Container `/app/storage` → Mac'te `/Volumes/platform-files`, API sunucusunda `/mnt/platform-files` → her ikisi NFS → files-01 `/srv/files`
 
 **Dizin yapısı** (`files01-nfs-model.md` ile birebir uyumlu):
 ```
@@ -1277,19 +1266,22 @@ LIMIT 5;
 ```
 `actor_ip` sütununda telefonun gerçek IP adresi görülmeli.
 
-## Çoklu Ortam Desteği — Mac + UTM Linux (TAMAMLANDI ✅ — 2026-06-30)
+## Çoklu Ortam Desteği — Mac + API Sunucusu (TAMAMLANDI ✅ — 2026-06-30)
 
 ### Topoloji
 
 ```
-Mac (geliştirme)
-  └─ Vite dev server :5173  ─proxy→  UTM Linux Docker :5090 (nginx gateway)
-                                          ├─ yonetimapi
-                                          ├─ fileservice
-                                          ├─ keycloak :8080
-                                          └─ postgres
-UTM Linux files-01 (192.168.64.3)
-  └─ NFS /srv/files  ─mount→  /mnt/platform-files  (UTM Linux Docker sunucusunda)
+files-01 (192.168.64.3)
+  /srv/files  ─NFS─▶  Mac: /Volumes/platform-files
+              ─NFS─▶  API sunucusu (192.168.64.5): /mnt/platform-files
+
+Mac (tarayıcı + geliştirme)
+  docker compose → localhost:5090
+  → gateway → yonetimapi, fileservice, keycloak, postgres
+
+API sunucusu (192.168.64.5)
+  docker compose → 192.168.64.5:5090
+  → gateway → yonetimapi, fileservice, keycloak, postgres
 ```
 
 ### Yapılan değişiklikler
@@ -1299,7 +1291,7 @@ UTM Linux files-01 (192.168.64.3)
 const apiTarget = env.API_TARGET ?? 'http://localhost:5090'
 ```
 - Yerel Docker: varsayılan (`localhost:5090`)
-- UTM Linux Docker: `client/.env.local` dosyasına `API_TARGET=http://192.168.64.5:5090`
+- API sunucusu üzerinden: `client/.env.local` dosyasına `API_TARGET=http://192.168.64.5:5090`
 
 **`docker-compose.yml`** — iki fix:
 1. Keycloak `KC_HOSTNAME=localhost` → Mac/Linux Docker fark etmeksizin token `iss` claim'i sabit `localhost:8080`
@@ -1331,28 +1323,25 @@ docker compose up --build -d
 docker compose ps   # tüm servisler healthy olana kadar
 ```
 
-### Mac'te geliştirme başlatma
+### Mac'te çalıştırma
 
 ```bash
-cd client
-# .env.local zaten API_TARGET=http://192.168.64.5:5090 içeriyor
-npm run dev -- --host
-# → http://localhost:5173  (Mac'te tarayıcı)
-# → http://<mac-ip>:5173   (telefon veya başka cihaz)
+bash setup-mac.sh
+# Tarayıcı: http://localhost:5090
 ```
 
 ### Neden KC_HOSTNAME gerekti?
 
 Mac Docker'da YonetimApi `keycloak:8080`'i çağırdığında token `iss=keycloak:8080` dönebiliyordu ama `ValidIssuers=["localhost:8080"]` bekleniyordu → 401. `KC_HOSTNAME=localhost` ile Keycloak her ortamda aynı issuer'ı üretir.
 
-## Linux Docker Üretim Kurulumu (TAMAMLANDI ✅ — 2026-06-30)
+## Çoklu Ortam Kurulumu (TAMAMLANDI ✅ — 2026-06-30)
 
-Tüm sistem Mac'teki geliştirme ortamından çıktı; UTM üzerinde çalışan Linux Docker sunucusuna taşındı.
+Sistem hem Mac'te hem API sunucusunda (192.168.64.5) çalışacak şekilde yapılandırıldı. Her iki ortam da aynı files-01 NFS sunucusuna bağlanır.
 
 ### Topoloji
 
 ```
-Mac (tarayıcı)  ──http://192.168.64.5:5090──▶  UTM Linux Docker (192.168.64.5)
+Mac (tarayıcı)  ──http://192.168.64.5:5090──▶  API sunucusu (192.168.64.5)
                                                     ├─ gateway (nginx) :5090
                                                     ├─ client (nginx SPA) :80 (iç)
                                                     ├─ yonetimapi :8080 (iç)
