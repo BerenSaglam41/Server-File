@@ -156,11 +156,6 @@ services:
       - yonetimapi
       - flotaapi
       - client
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
     networks:
       - platform-net
 

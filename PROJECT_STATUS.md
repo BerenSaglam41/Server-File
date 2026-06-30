@@ -9,6 +9,9 @@ sırada ne olduğunu anlatır. Yeni bir Claude oturumuna bu dosyayı ve aşağı
 Tüm katmanları (auth, storage, RBAC, audit, dosya akışı) baştan sona açıklayan referans doküman:
 → **`MIMARI.md`**
 
+Sıfırdan kurulum (Mac geliştirme, Linux üretim, Files-01 NFS):
+→ **`KURULUM.md`**
+
 ## Okuman gereken kaynak dosyalar (proje kararları buradan geliyor)
 
 Bu 5 doküman, projenin mimari kararlarının kaynağı. Kod buradaki kararları uygular,
@@ -1413,7 +1416,7 @@ docker compose up --build -d
 
 ## SIRADAKİ ADIM
 
-- **Henüz push edilmeyen commit'ler**: `JWKS backchannel handler`, `gateway Dockerfile`, `setup-server.sh` güncellemeleri commit edildi ama push edilmedi. `git push origin main` + Linux'ta `git pull && docker compose up --build yonetimapi fileservice -d` ile tamamlanacak.
+- **Henüz push edilmeyen commit'ler**: `JWKS backchannel handler`, `gateway Dockerfile`, `setup-server.sh` güncellemeleri + `KURULUM.md` commit edildi ama push edilmedi. `git push origin main` + Linux'ta `git pull && docker compose up --build yonetimapi fileservice -d` ile tamamlanacak.
 - **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
 - **Sertifika rotasyonu**: Prod'da cert süresi dolmadan yenileme prosedürü (sıfır kesinti için rolling restart). Mevcut certler 825 gün geçerli.
 - **Keycloak admin güvenliği**: `/admin` konsolunu dış erişime kapatmak (firewall veya KC config).
