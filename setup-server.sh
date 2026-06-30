@@ -43,6 +43,11 @@ echo "[..] Docker container'ları rebuild ediliyor..."
 docker compose up --build -d
 echo "[OK] Container'lar ayakta"
 
+# 4. Fileservice NFS bağlantısını uygula (NFS container başladıktan sonra mount edildiyse)
+echo "[..] Fileservice yeniden başlatılıyor (NFS storage aktif)..."
+docker compose restart fileservice
+echo "[OK] Fileservice NFS ile çalışıyor"
+
 echo ""
 echo "=== Kurulum tamamlandı ==="
 echo "Durum: docker compose ps"
