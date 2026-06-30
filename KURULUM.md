@@ -92,11 +92,11 @@ Bu script otomatik olarak şunları yapar:
 
 **3. Doğrula**
 ```bash
-curl http://localhost:5090/health
+curl -k https://localhost:5090/health
 # {"status":"healthy","service":"Gateway-Nginx"}
 ```
 
-Tarayıcıda: `http://localhost:5090`
+Tarayıcıda: `https://localhost:5090` (self-signed uyarısı → ileri / accept)
 
 ### Mac yeniden başlatıldığında
 
@@ -155,16 +155,104 @@ Bu script otomatik olarak şunları yapar:
 **3. Doğrula**
 ```bash
 docker compose ps
-curl http://localhost:5090/health
+curl -k https://localhost:5090/health
 # {"status":"healthy","service":"Gateway-Nginx"}
 ```
 
-Dışarıdan: `http://192.168.64.5:5090`
+Dışarıdan: `https://192.168.64.5:5090` (self-signed) veya `https://domain:5090` (Let's Encrypt)
 
 ### Güncelleme
 
 ```bash
 cd ~/Server-File && git pull && bash setup-server.sh
+```
+
+---
+
+## 4. HTTPS Kurulumu
+
+Gateway, HTTPS üzerinden çalışır. İki seçenek var:
+
+### Seçenek A: Dahili / Geliştirme — Self-Signed Sertifika
+
+`certs/generate-certs.sh` gateway için otomatik sertifika üretir (setup scriptleri zaten bunu çalıştırır):
+
+```bash
+bash certs/generate-certs.sh
+```
+
+Üretilen dosyalar: `certs/gateway.crt`, `certs/gateway.key`
+
+Container'lar başlatıldıktan sonra:
+
+```bash
+# Mac
+curl -k https://localhost:5090/health
+# {"status":"healthy","service":"Gateway-Nginx"}
+
+# API sunucusu
+curl -k https://192.168.64.5:5090/health
+```
+
+Tarayıcıda: `https://localhost:5090` (self-signed uyarısı → güvenli devam et / ileri / accept)
+
+> `-k` / `--insecure` yalnız self-signed için gereklidir. Let's Encrypt sertifikasıyla gerek yok.
+
+---
+
+### Seçenek B: VPS — Let's Encrypt (Gerçek Sertifika)
+
+**Ön koşullar:**
+- Bir domain adı (örn. `platform.sirket.com`) → VPS IP'ye A kaydı
+- VPS'in 80. portu dışarıya açık olmalı (sertifika doğrulaması için)
+
+**1. certbot kur ve sertifika al:**
+
+```bash
+sudo apt install -y certbot
+
+# Gateway container'ı durdur (80. port serbest olsun)
+docker compose stop gateway
+
+# Sertifika al
+sudo certbot certonly --standalone -d platform.sirket.com
+
+# Sertifikaları proje certs/ dizinine kopyala
+DOMAIN=platform.sirket.com
+PROJ=/home/kullanici/dosya-sistemi-projesi
+
+sudo cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $PROJ/certs/gateway.crt
+sudo cp /etc/letsencrypt/live/$DOMAIN/privkey.pem   $PROJ/certs/gateway.key
+sudo chmod 644 $PROJ/certs/gateway.crt
+sudo chmod 640 $PROJ/certs/gateway.key
+sudo chown $(whoami) $PROJ/certs/gateway.key
+
+# Gateway'i yeniden başlat
+docker compose up -d gateway
+```
+
+**2. Otomatik yenileme (cron):**
+
+```bash
+sudo crontab -e
+```
+
+Ekle (alanları kendi değerlerinle değiştir):
+
+```
+0 3 1 * * certbot renew --quiet \
+  && cp /etc/letsencrypt/live/platform.sirket.com/fullchain.pem /home/kullanici/dosya-sistemi-projesi/certs/gateway.crt \
+  && cp /etc/letsencrypt/live/platform.sirket.com/privkey.pem   /home/kullanici/dosya-sistemi-projesi/certs/gateway.key \
+  && docker compose -f /home/kullanici/dosya-sistemi-projesi/docker-compose.yml restart gateway
+```
+
+Let's Encrypt sertifikası 90 günde bir yenilenir; yukarıdaki cron her ay 1'inde kontrol eder.
+
+**3. Doğrula:**
+
+```bash
+curl https://platform.sirket.com:5090/health
+# -k gerekmez — gerçek sertifika
 ```
 
 ---

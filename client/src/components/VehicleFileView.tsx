@@ -1,15 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { AuthState, Personnel, PersonnelFile } from '../types'
-import { RELATION_TYPE_LABELS, SINGLE_PRIMARY_TYPES, UPLOAD_RELATION_TYPES } from '../types'
-import { getPersonnelFiles, uploadFile, archiveFile, archiveSinglePrimary, fetchFileBlob } from '../api'
-import { canWrite } from '../auth'
+import type { AuthState, PersonnelFile } from '../types'
+import { RELATION_TYPE_LABELS, VEHICLE_UPLOAD_RELATION_TYPES, VEHICLE_SINGLE_PRIMARY_TYPES } from '../types'
+import { getVehicleFiles, uploadVehicleFile, archiveVehiclePrimary, fetchVehicleFileContent } from '../api'
+import { canVehicleWrite } from '../auth'
 import FileCard from './FileCard'
 import UploadModal from './UploadModal'
 
 interface Props {
-  personnel: Personnel
+  vehicleId: string
   auth: AuthState
-  onBack: () => void
 }
 
 function groupByType(files: PersonnelFile[]): Map<string, PersonnelFile[]> {
@@ -21,26 +20,26 @@ function groupByType(files: PersonnelFile[]): Map<string, PersonnelFile[]> {
   return map
 }
 
-export default function PersonnelFileView({ personnel, auth, onBack }: Props) {
+export default function VehicleFileView({ vehicleId, auth }: Props) {
   const [files, setFiles] = useState<PersonnelFile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showUpload, setShowUpload] = useState(false)
 
-  const writable = canWrite(auth, personnel.personnelId)
+  const writable = canVehicleWrite(auth, vehicleId)
 
   const loadFiles = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const data = await getPersonnelFiles(personnel.personnelId)
+      const data = await getVehicleFiles(vehicleId)
       setFiles(data)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Yükleme hatası')
+      setError(err instanceof Error ? err.message : 'Dosyalar alınamadı')
     } finally {
       setLoading(false)
     }
-  }, [personnel.personnelId])
+  }, [vehicleId])
 
   useEffect(() => { loadFiles() }, [loadFiles])
 
@@ -48,25 +47,11 @@ export default function PersonnelFileView({ personnel, auth, onBack }: Props) {
 
   return (
     <div>
-      {/* Personel header */}
+      {/* Header */}
       <div className="flex items-start justify-between mb-5 gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          {/* Geri — sadece mobilde görünür */}
-          <button
-            onClick={onBack}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors sm:hidden flex-shrink-0"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-gray-900 truncate">{personnel.displayName}</h2>
-            <p className="text-xs text-gray-500 truncate">
-              {[personnel.title, personnel.department].filter(Boolean).join(' · ')}
-              <span className="ml-1.5 font-mono text-gray-400">{personnel.personnelId}</span>
-            </p>
-          </div>
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold text-gray-900">Araç Dosyaları</h2>
+          <p className="text-xs text-gray-500 font-mono">{vehicleId}</p>
         </div>
 
         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -153,11 +138,15 @@ export default function PersonnelFileView({ personnel, auth, onBack }: Props) {
                     file={f}
                     writable={writable}
                     onArchived={loadFiles}
-                    onDownload={() => fetchFileBlob(personnel.personnelId, f.fileId)}
+                    onDownload={
+                      VEHICLE_SINGLE_PRIMARY_TYPES.has(f.relationType)
+                        ? () => fetchVehicleFileContent(vehicleId, f.relationType)
+                        : null
+                    }
                     onArchive={
-                      SINGLE_PRIMARY_TYPES.has(f.relationType)
-                        ? () => archiveSinglePrimary(personnel.personnelId, f.relationType)
-                        : () => archiveFile(personnel.personnelId, f.fileId)
+                      VEHICLE_SINGLE_PRIMARY_TYPES.has(f.relationType)
+                        ? () => archiveVehiclePrimary(vehicleId, f.relationType)
+                        : null
                     }
                   />
                 ))}
@@ -169,9 +158,9 @@ export default function PersonnelFileView({ personnel, auth, onBack }: Props) {
 
       {showUpload && (
         <UploadModal
-          entityDisplayName={personnel.displayName}
-          relationTypes={UPLOAD_RELATION_TYPES}
-          uploadFn={(rt, file, onProgress) => uploadFile(personnel.personnelId, rt, file, onProgress)}
+          entityDisplayName={vehicleId}
+          relationTypes={VEHICLE_UPLOAD_RELATION_TYPES}
+          uploadFn={(rt, file, onProgress) => uploadVehicleFile(vehicleId, rt, file, onProgress)}
           onClose={() => setShowUpload(false)}
           onUploaded={() => { setShowUpload(false); loadFiles() }}
         />

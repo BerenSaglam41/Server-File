@@ -1,14 +1,13 @@
 import { useState } from 'react'
-import type { AuthState, PersonnelFile } from '../types'
-import { RELATION_TYPE_LABELS, SINGLE_PRIMARY_TYPES } from '../types'
-import { archiveFile, archiveSinglePrimary, fetchFileBlob } from '../api'
+import type { PersonnelFile } from '../types'
+import { RELATION_TYPE_LABELS } from '../types'
 
 interface Props {
   file: PersonnelFile
-  personnelId: string
-  auth: AuthState
   writable: boolean
   onArchived: () => void
+  onDownload?: (() => Promise<{ blob: Blob; contentType: string; fileName: string }>) | null
+  onArchive?: (() => Promise<void>) | null
 }
 
 function formatSize(bytes: number) {
@@ -29,17 +28,18 @@ function fileIcon(contentType: string) {
   return 'FILE'
 }
 
-export default function FileCard({ file, personnelId, auth, writable, onArchived }: Props) {
+export default function FileCard({ file, writable, onArchived, onDownload, onArchive }: Props) {
   const [archiving, setArchiving] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [error, setError] = useState('')
   const displayName = file.originalFileName || `${RELATION_TYPE_LABELS[file.relationType] ?? file.relationType}.${file.extension}`
 
   async function handleDownload() {
+    if (!onDownload) return
     setDownloading(true)
     setError('')
     try {
-      const { blob, fileName } = await fetchFileBlob(personnelId, file.fileId)
+      const { blob, fileName } = await onDownload()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -54,15 +54,12 @@ export default function FileCard({ file, personnelId, auth, writable, onArchived
   }
 
   async function handleArchive() {
+    if (!onArchive) return
     if (!confirm(`"${displayName}" dosyasını arşivlemek istiyor musunuz?`)) return
     setArchiving(true)
     setError('')
     try {
-      if (SINGLE_PRIMARY_TYPES.has(file.relationType)) {
-        await archiveSinglePrimary(personnelId, file.relationType)
-      } else {
-        await archiveFile(personnelId, file.fileId)
-      }
+      await onArchive()
       onArchived()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Arşivleme hatası')
@@ -89,24 +86,26 @@ export default function FileCard({ file, personnelId, auth, writable, onArchived
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {/* Download */}
-          <button
-            onClick={handleDownload}
-            disabled={downloading}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors disabled:opacity-40"
-            title="İndir"
-          >
-            {downloading ? (
-              <div className="w-3.5 h-3.5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-            )}
-          </button>
+          {onDownload && (
+            <button
+              onClick={handleDownload}
+              disabled={downloading}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors disabled:opacity-40"
+              title="İndir"
+            >
+              {downloading ? (
+                <div className="w-3.5 h-3.5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+              )}
+            </button>
+          )}
 
           {/* Archive */}
-          {writable && (
+          {writable && onArchive && (
             <button
               onClick={handleArchive}
               disabled={archiving}

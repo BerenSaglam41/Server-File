@@ -77,7 +77,7 @@ Keycloak realm: platform
 │
 ├── Client: frontend-test  (public, password grant)
 │     Kullanıcılar bu client üzerinden token alır.
-│     Claims: sub, preferred_username, personnel_id, roles[]
+│     Claims: sub, preferred_username, personnel_id, vehicle_id, roles[]
 │
 ├── Client: yonetimapi  (confidential, client_credentials)
 │     YonetimApi, FileServiceApi'ye çağrı yaparken bu client ile token alır.
@@ -97,16 +97,19 @@ Kullanıcı login olduğunda Keycloak aşağıdaki JWT'yi imzalar:
   "sub": "uuid-of-user",
   "preferred_username": "hr001",
   "personnel_id": "HR001",
+  "vehicle_id": null,
   "roles": ["personnel.files.read.all", "personnel.files.write.all"],
   "iss": "http://localhost:8080/realms/platform",
   "exp": 1234567890
 }
 ```
 
-Bu token:
-- YonetimApi'ye her istekte `Authorization: Bearer <token>` header'ında gider
+`fleetuser` için `vehicle_id: "test_arac_1"`, `personnel_id` ise yoktur.
+
+Bu token **tarayıcıya gönderilmez**; YonetimApi BFF tarafından `at` HttpOnly cookie'sine yazılır.
+- Tarayıcı `at` cookie'sini her istekte otomatik gönderir
+- YonetimApi cookie'den token'ı okur, doğrular, `roles` claim'ini RBAC için kullanır
 - FileServiceApi'ye **hiçbir zaman ulaşmaz**
-- YonetimApi bunu doğrular, içindeki `roles` claim'ini RBAC için kullanır
 
 ### 2.4 Service Token (Service JWT)
 
@@ -131,23 +134,26 @@ Bu token **kullanıcının token'ının kopyası değildir.** YonetimApi'nin ken
 
 ## 3. Auth Akışı — Adım Adım
 
-### 3.1 Login
+### 3.1 Login (BFF Cookie Akışı)
 
 ```
-Kullanıcı         Client          Keycloak
-   │               │                 │
-   │─── giriş ────▶│                 │
-   │               │─── POST /token ▶│
-   │               │    (username,   │
-   │               │     password)   │
-   │               │◀── user JWT ────│
-   │               │    (imzalı,     │
-   │               │     roller ile) │
-   │               │                 │
-   │               │  localStorage'a kaydeder:
-   │               │  { token, refreshToken,
-   │               │    refreshExpiresAt, user }
+Kullanıcı       Client         YonetimApi (BFF)       Keycloak
+   │               │                  │                   │
+   │─── giriş ────▶│                  │                   │
+   │               │─ POST /api/auth/login ──────────────▶│
+   │               │  {username, password}│               │
+   │               │                  │── password grant ▶│
+   │               │                  │◀─ {access, refresh}│
+   │               │◀─ Set-Cookie: at=... rt=... (HttpOnly, SameSite=Strict)
+   │               │   {user, expiresAt} JSON             │
+   │               │                  │                   │
+   │               │  Bellekte tutar: {user, expiresAt}   │
+   │               │  Token YOK — cookie browser'da       │
 ```
+
+`at` cookie: access token, `expires_in` süreli, `Path=/api`
+`rt` cookie: refresh token, `refresh_expires_in` süreli, `Path=/api`
+Her ikisi de `HttpOnly=true` — JS tarafından okunamaz (XSS koruması).
 
 ### 3.2 API İsteği (örnek: CV indirme)
 
@@ -155,7 +161,7 @@ Kullanıcı         Client          Keycloak
 Client            Gateway           YonetimApi        FileServiceApi
   │                  │                  │                   │
   │──GET /api/personnel/P001/cv/content▶│                   │
-  │   Authorization: Bearer <user JWT>  │                   │
+  │   Cookie: at=<token>  (otomatik)    │                   │
   │                  │                  │                   │
   │                  │  (nginx proxy)   │                   │
   │                  │─────────────────▶│                   │
@@ -278,6 +284,7 @@ read.self → SELECT * WHERE personnel_id = $ownId
 | adm001 | Demo1234! | read.all + write.all | Tüm personel, tüm işlemler |
 | m001/m002/m003 | Demo1234! | read.team | Kendi + ekibi (read-only) |
 | p001..p024 | Demo1234! | read.self | Yalnız kendi kaydı (read-only) |
+| fleetuser | Demo1234! | — (vehicle_id: test_arac_1) | Yalnız kendi aracını görür/yükler |
 
 ---
 
@@ -324,9 +331,16 @@ JWT ve mTLS birbirini ikame etmez; **her ikisi de aynı anda zorunlu**:
       ab/
         cd/
           abcd1234-....pdf     ← UUID bazlı shard
+    fleet/
+      ab/
+        cd/
+          abcd1234-....jpg
+    .probe                     ← health check (FileServiceApi okur)
   staging/              ← StagingPath = geçici yazma alanı
     personnel/
       ...                      ← başarılı yüklemede buradan export'a taşınır
+    fleet/
+      ...
 ```
 
 Dosya adı formatı: `{domain}/{uuid[0:2]}/{uuid[2:4]}/{uuid}.{ext}`
@@ -506,10 +520,11 @@ Her istek her iki tabloya da yazar — biri teknik, diğeri iş seviyesinde izle
 nginx location kuralları:
 
 /internal/            → 404  (FileServiceApi iç endpoint'leri asla dışarıya açılmaz)
+/api/auth/*           → yonetimapi:8080  (BFF login/refresh/logout)
 /api/personnel/*      → yonetimapi:8080
 /api/vehicles/*       → flotaapi:8080
 /health               → {"status":"healthy","service":"Gateway-Nginx"}
-/*                    → 404  (tanımsız her route reddedilir)
+/*                    → client:80  (React SPA — try_files ile SPA routing)
 
 Hata yanıtları (JSON):
 502 upstream_unavailable  → servis çöktüyse
@@ -526,7 +541,7 @@ Tüm kimlik/yetki kararları YonetimApi ve FileServiceApi'de verilir.
 
 ---
 
-## 11. Token Yenileme (Refresh Token)
+## 11. Token Yenileme (BFF Refresh)
 
 ```
 Access token süresi doluyor (5 dk)
@@ -535,23 +550,25 @@ Access token süresi doluyor (5 dk)
 Client: isAccessTokenFresh(auth, skewSeconds=30) → false
       │
       ▼
-refreshLogin(refreshToken) →
-  POST /realms/platform/.../token
-  grant_type=refresh_token
-  refresh_token=<mevcut refresh token>
+POST /api/auth/refresh
+  (rt cookie otomatik gider — JS token görmez)
       │
       ▼
-Keycloak → yeni access_token + (varsa) yeni refresh_token
+YonetimApi BFF → Keycloak refresh grant
+Keycloak → yeni access_token + refresh_token
+BFF → at + rt cookie'lerini günceller (Set-Cookie)
       │
       ▼
-saveAuth() → localStorage'ı güncelle
+Client ← {user, expiresAt} JSON
+auth state bellekte güncellenir
+localStorage YOK — token hiçbir zaman JS'e ulaşmaz
       │
       ▼
 Devam et (kullanıcı oturumu kapatmaz)
 
-Refresh token da süresi dolduysa:
-  → clearAuth() → localStorage temizle
-  → kullanıcı login ekranına yönlendirilir
+rt cookie süresi dolduysa:
+  → POST /api/auth/refresh → 401
+  → Client → bffLogout() → login ekranına
 ```
 
 ---

@@ -33,6 +33,26 @@ EOF
   echo "  → $name.crt + $name.key"
 }
 
+sign_server_gateway() {
+  local name="$1" subj="$2"
+  echo "=== $name (server/gateway) ==="
+  cat > "$TMP/$name.ext" <<EOF
+[req]
+distinguished_name = dn
+[dn]
+[SAN]
+subjectAltName=DNS:gateway,DNS:localhost,IP:127.0.0.1,IP:192.168.64.5
+extendedKeyUsage=serverAuth
+EOF
+  openssl genrsa -out "$DIR/$name.key" 2048
+  openssl req -new -key "$DIR/$name.key" -out "$TMP/$name.csr" -subj "$subj"
+  openssl x509 -req -in "$TMP/$name.csr" \
+    -CA "$DIR/ca.crt" -CAkey "$DIR/ca.key" -CAcreateserial \
+    -out "$DIR/$name.crt" -days 825 \
+    -extensions SAN -extfile "$TMP/$name.ext"
+  echo "  → $name.crt + $name.key"
+}
+
 sign_client() {
   local name="$1" subj="$2"
   echo "=== $name (client) ==="
@@ -52,13 +72,15 @@ EOF
   echo "  → $name.crt + $name.key"
 }
 
-sign_server "fileservice" "/CN=fileservice/O=Platform/OU=Internal"
-sign_client "yonetimapi"  "/CN=yonetimapi/O=Platform/OU=Internal"
-sign_client "filoapi"     "/CN=filoapi/O=Platform/OU=Internal"
+sign_server         "fileservice" "/CN=fileservice/O=Platform/OU=Internal"
+sign_server_gateway "gateway"     "/CN=gateway/O=Platform/OU=Internal"
+sign_client         "yonetimapi"  "/CN=yonetimapi/O=Platform/OU=Internal"
+sign_client         "filoapi"     "/CN=filoapi/O=Platform/OU=Internal"
 
 echo ""
 echo "=== Doğrulama ==="
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/fileservice.crt"
+openssl verify -CAfile "$DIR/ca.crt" "$DIR/gateway.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/yonetimapi.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/filoapi.crt"
 

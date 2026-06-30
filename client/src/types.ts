@@ -2,6 +2,7 @@ export interface AuthUser {
   sub: string
   preferred_username: string
   personnel_id?: string
+  vehicle_id?: string
   roles: string[]
 }
 
@@ -51,3 +52,15 @@ export const UPLOAD_RELATION_TYPES = [
 ] as const
 
 export type UploadRelationType = typeof UPLOAD_RELATION_TYPES[number]['value']
+
+export const VEHICLE_UPLOAD_RELATION_TYPES = [
+  { value: 'photo',             label: 'Fotoğraf',   single: true  },
+  { value: 'document',          label: 'Belge',       single: true  },
+  { value: 'official_document', label: 'Resmi Evrak', single: true  },
+  { value: 'attachment',        label: 'Ek Dosya',    single: false },
+  { value: 'report',            label: 'Rapor',       single: false },
+] as const
+
+export const VEHICLE_SINGLE_PRIMARY_TYPES = new Set(['photo', 'document', 'official_document'])
+
+export type VehicleUploadRelationType = typeof VEHICLE_UPLOAD_RELATION_TYPES[number]['value']

@@ -47,7 +47,7 @@ public static class AuthEndpoints
             await kcResp.Content.ReadAsStreamAsync(), JsonOpts);
         if (kc?.AccessToken is null) return Results.StatusCode(502);
 
-        SetCookies(ctx.Response, kc);
+        SetCookies(ctx.Response, kc, IsSecureRequest(ctx));
         var user = DecodeJwtPayload(kc.AccessToken);
         return Results.Ok(BuildResponse(user, kc.ExpiresIn));
     }
@@ -75,7 +75,7 @@ public static class AuthEndpoints
 
         if (!kcResp.IsSuccessStatusCode)
         {
-            ClearCookies(ctx.Response);
+            ClearCookies(ctx.Response, IsSecureRequest(ctx));
             return Results.Json(new { error = "session_expired" }, statusCode: 401);
         }
 
@@ -83,7 +83,7 @@ public static class AuthEndpoints
             await kcResp.Content.ReadAsStreamAsync(), JsonOpts);
         if (kc?.AccessToken is null) return Results.StatusCode(502);
 
-        SetCookies(ctx.Response, kc);
+        SetCookies(ctx.Response, kc, IsSecureRequest(ctx));
         var user = DecodeJwtPayload(kc.AccessToken);
         return Results.Ok(BuildResponse(user, kc.ExpiresIn));
     }
@@ -91,31 +91,36 @@ public static class AuthEndpoints
     // ─── LOGOUT ──────────────────────────────────────────────────────────────
     private static IResult LogoutAsync(HttpContext ctx)
     {
-        ClearCookies(ctx.Response);
+        ClearCookies(ctx.Response, IsSecureRequest(ctx));
         return Results.Ok();
     }
 
     // ─── HELPERS ─────────────────────────────────────────────────────────────
-    private static CookieOptions MakeCookieOpts(TimeSpan maxAge) => new()
+    private static bool IsSecureRequest(HttpContext ctx) =>
+        ctx.Request.IsHttps ||
+        string.Equals(ctx.Request.Headers["X-Forwarded-Proto"].FirstOrDefault(),
+            "https", StringComparison.OrdinalIgnoreCase);
+
+    private static CookieOptions MakeCookieOpts(TimeSpan maxAge, bool secure) => new()
     {
         HttpOnly = true,
-        Secure   = false,   // prod'da true; HTTPS gerektirir
+        Secure   = secure,
         SameSite = SameSiteMode.Strict,
         Path     = "/api",
         MaxAge   = maxAge,
     };
 
-    private static void SetCookies(HttpResponse response, KcTokenResponse kc)
+    private static void SetCookies(HttpResponse response, KcTokenResponse kc, bool secure)
     {
         var atAge = TimeSpan.FromSeconds(kc.ExpiresIn        > 0 ? kc.ExpiresIn        : 300);
         var rtAge = TimeSpan.FromSeconds(kc.RefreshExpiresIn > 0 ? kc.RefreshExpiresIn : 1800);
-        response.Cookies.Append("at", kc.AccessToken!,         MakeCookieOpts(atAge));
-        response.Cookies.Append("rt", kc.RefreshToken ?? "",   MakeCookieOpts(rtAge));
+        response.Cookies.Append("at", kc.AccessToken!,         MakeCookieOpts(atAge, secure));
+        response.Cookies.Append("rt", kc.RefreshToken ?? "",   MakeCookieOpts(rtAge, secure));
     }
 
-    private static void ClearCookies(HttpResponse response)
+    private static void ClearCookies(HttpResponse response, bool secure)
     {
-        var gone = new CookieOptions { Path = "/api", MaxAge = TimeSpan.Zero };
+        var gone = new CookieOptions { Path = "/api", MaxAge = TimeSpan.Zero, Secure = secure };
         response.Cookies.Delete("at", gone);
         response.Cookies.Delete("rt", gone);
     }
@@ -142,6 +147,7 @@ public static class AuthEndpoints
             PersonnelId       = doc.TryGetProperty("personnel_id", out var pv) ? pv.GetString()
                                 : string.IsNullOrEmpty(username)               ? null
                                 : username.ToUpperInvariant(),
+            VehicleId         = doc.TryGetProperty("vehicle_id",   out var vv) ? vv.GetString() : null,
             Roles             = roles,
             Exp               = doc.TryGetProperty("exp",          out var ev) ? ev.GetInt64() : 0,
         };
@@ -154,6 +160,7 @@ public static class AuthEndpoints
             sub                = p.Sub,
             preferred_username = p.PreferredUsername,
             personnel_id       = p.PersonnelId,
+            vehicle_id         = p.VehicleId,
             roles              = p.Roles,
         },
         expiresAt = p.Exp,
@@ -175,6 +182,7 @@ public static class AuthEndpoints
         public string       Sub               { get; set; } = "";
         public string       PreferredUsername { get; set; } = "";
         public string?      PersonnelId       { get; set; }
+        public string?      VehicleId         { get; set; }
         public List<string> Roles             { get; set; } = [];
         public long         Exp               { get; set; }
     }

@@ -598,16 +598,25 @@ Test: dry-run ✅, magic-byte ✅, archive önceki ✅, duplicate skip ✅, roll
 
 | Ortam | Komut | Açık portlar |
 |---|---|---|
-| Dev | `docker compose up` (override otomatik yüklenir) | 5090, 8080 + 5205, 5076, 5077 (test kolaylığı) |
-| Production | `docker compose -f docker-compose.yml up` | **Yalnız 5090 (Gateway) + 8080 (Keycloak)** |
+| Dev | `docker compose up` (override otomatik yüklenir) | 5090, **8080**, 5205, 5076, 5077 (test kolaylığı) |
+| Production | `docker compose -f docker-compose.yml up` | **Yalnız 5090 (Gateway)** |
 
 **DİKKAT:** `docker-compose.override.yml` yanlışlıkla production'da kullanılmamalı. Production deploy'da her zaman `-f docker-compose.yml` ile açıkça belirt.
+
+**Keycloak 8080 kararı (2026-06-30 güncellendi):**
+
+Keycloak port `8080:8080` `docker-compose.override.yml`'e taşındı. Production'da Keycloak dışa açılmaz. BFF pattern sayesinde:
+- Token alımı `/api/auth/login` → YonetimApi BFF üzerinden yapılır
+- JWKS/MetadataAddress servislerin içinden `keycloak:8080` Docker ağı üzerinden erişilir
+- 8080 dış erişime kapalı olsa da sistem tamamen çalışır
+
+Dev'de `docker compose up` otomatik olarak `override.yml`'i de yükler, Keycloak 8080'den erişilebilir (admin arayüzü için gerekli).
 
 **Doğrulanan kontroller:**
 
 | Test | Sonuç |
 |---|---|
-| Production config: yalnız 5090 + 8080 published | ✅ |
+| Production config: yalnız 5090 published | ✅ |
 | Gateway `/internal/files/**` → 404 | ✅ |
 | Gateway `/api/personnel/**` → YonetimApi | ✅ |
 | Gateway `/api/vehicles/**` → FlotaApi | ✅ |
@@ -615,21 +624,6 @@ Test: dry-run ✅, magic-byte ✅, archive önceki ✅, duplicate skip ✅, roll
 | Host'tan 5205/5076/5077 → bağlantı reddedildi (production modunda) | ✅ |
 | yonetimapi container → `fileservice:8080` DNS erişimi | ✅ (uygulama logu + uçtan uca 200) |
 | flotaapi container → `fileservice:8080` DNS erişimi | ✅ |
-
-**Keycloak 8080 production kararı:**
-
-Keycloak'ın dışa açık kalması bilinçli bir karardır. İstemcilerin token alması (`POST /realms/platform/.../token`) ve servislerin JWKS çekmesi (`GET /realms/platform/.../certs`) için erişilebilir olmalıdır.
-
-| Yol | Dev | Production önerisi |
-|---|---|---|
-| `/realms/platform/...` (token, JWKS, discovery) | 8080 açık | Açık kalabilir veya Gateway'e route edilebilir |
-| `/admin/**` (Keycloak yönetim konsolu) | 8080 açık | **Firewall ile kapatılmalı** |
-
-Production'da minimum yapılması gerekenler:
-1. Keycloak admin konsolunu (`/admin`) dış erişime kapat (firewall veya Keycloak `hostname-admin` config)
-2. Keycloak 8080'i yalnız yerel ağa sınırla (UTM subnet için uygundur)
-
-Gateway üzerinden Keycloak routing teknik olarak mümkündür (nginx `location /realms/` → `keycloak:8080`) ama JWT `iss` claim'i ve MetadataAddress eşleşmesi için ek config gerekir — V1 kapsam dışı bırakıldı.
 
 ## Docker Konteynerizasyonu (TAMAMLANDI ✅)
 
@@ -1070,8 +1064,7 @@ FileId bazlı indirme/arşivleme akışında personel bağlamı doğrulandı. `Y
 
 ### Kapsam Dışı
 
-- Fleet/Flota UI yok; `FlotaApi` backend consumer olarak mevcut.
-- Production frontend hosting imajı henüz eklenmedi; client şu an Vite dev/build çıktısı olarak hazır (gateway nginx'i ile karıştırılmamalı — gateway nginx:alpine ayrı servis).
+- Production frontend hosting imajı henüz eklenmedi; client şu an Vite dev/build çıktısı olarak hazır (gateway nginx:alpine ayrı servis).
 
 ## Content-Disposition ve İndirme İsmi Düzeltmeleri (2026-06-30)
 
@@ -1403,12 +1396,99 @@ docker compose up --build -d
 - **DB seed**: `docker compose down -v` sonrasında postgres volume sıfırlanır; `setup-server.sh` ile veya `docker exec -i server-file-postgres-1 psql ... < 01-schema.sql && 02-seed.sql` ile yeniden çalıştır.
 - **NFS kalıcılığı**: Sunucu reboot'ta NFS mount kaybolabilir. `setup-server.sh` her çalışmada mount'u kontrol eder. fstab'a eklenmişse otomatik olur.
 
+## Client UI — Filo (Fleet) ve Yükleme İlerlemesi (TAMAMLANDI ✅ — 2026-06-30)
+
+### Fleet UI
+
+`fleetuser` kullanıcısı (JWT `vehicle_id` claim'i olan) artık kendi aracının dosyalarını yönetebiliyor.
+
+**Yeni bileşenler:**
+- `client/src/components/VehicleFileView.tsx` — araç dosya görünümü (PersonnelFileView muadili)
+- `client/src/components/Dashboard.tsx` — hem personel hem araç kullanıcısı için sekme navigasyonu
+
+**Değiştirilen bileşenler:**
+- `YonetimApi/Endpoints/AuthEndpoints.cs` — BFF artık `vehicle_id` JWT claim'ini `user` nesnesine ekliyor
+- `client/src/types.ts` — `AuthUser.vehicle_id?: string` + `VEHICLE_UPLOAD_RELATION_TYPES` + `VEHICLE_SINGLE_PRIMARY_TYPES`
+- `client/src/api.ts` — `getVehicleFiles`, `uploadVehicleFile`, `archiveVehiclePrimary`, `fetchVehicleFileContent`
+- `client/src/auth.ts` — `canVehicleWrite(auth, vehicleId): boolean`
+- `client/src/components/FileCard.tsx` — callback tabanlı yeniden yazıldı (`onDownload`, `onArchive`)
+- `client/src/components/PersonnelFileView.tsx` — yeni FileCard ve UploadModal arayüzüne güncellendi
+- `client/src/components/UploadModal.tsx` — generic yapıya alındı (`entityDisplayName`, `uploadFn`, `relationTypes`)
+
+**Dashboard davranışı:**
+- Kullanıcının hem `personnel` rolü hem `vehicle_id`'si varsa → "Personel" | "Filo" sekmeleri
+- Yalnız `vehicle_id` varsa (`fleetuser` gibi) → doğrudan araç dosya görünümü
+- Yalnız personel rolleri varsa → mevcut personel görünümü
+
+**Fleet kısıtlamaları (V1):**
+- Araç araması yok — her kullanıcı JWT'sindeki kendi `vehicle_id`'yi görür
+- Multi-primary tipler (attachment, report): indirme ve arşivleme yok (FlotaApi V1 content/archive endpoint'i yalnız single-primary için)
+- Single-primary tipler (photo, document, official_document): indirme + arşivleme mevcut
+
+### Yükleme İlerleme Çubuğu
+
+`fetch` → `XMLHttpRequest` geçişiyle dosya yükleme sırasında gerçek zamanlı ilerleme gösterimi eklendi.
+
+- `api.ts` — `xhrUpload()` yardımcı fonksiyonu; `uploadFile` ve `uploadVehicleFile` bu ortak fonksiyonu kullanır
+- `UploadModal.tsx` — yükleme sırasında `%0–%100` ilerleme çubuğu gösterir
+
+### Keycloak Admin Kapatma
+
+Keycloak port `8080:8080` `docker-compose.yml`'den `docker-compose.override.yml`'e taşındı.
+Production'da `docker compose -f docker-compose.yml up` ile başlatılırsa Keycloak dışa açılmaz.
+Dev'de (`docker compose up`) override otomatik yüklenir, 8080 erişilebilir kalır.
+
+### TypeScript Doğrulama
+
+`npx tsc --noEmit` — 0 hata.
+
+## HTTPS — Gateway TLS (TAMAMLANDI ✅ — 2026-06-30)
+
+Gateway artık HTTPS üzerinden çalışıyor. Self-signed sertifika (dev/iç ağ) ve Let's Encrypt (VPS/prod) destekleniyor.
+
+### Değiştirilen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `certs/generate-certs.sh` | `sign_server_gateway()` eklendi — SAN: `DNS:gateway,DNS:localhost,IP:127.0.0.1,IP:192.168.64.5`. Çağrı: `sign_server_gateway "gateway" ...` |
+| `nginx/nginx.conf` | HTTP→HTTPS redirect bloğu (listen 80) + HTTPS server bloğu (listen 443 ssl). `ssl_certificate /etc/nginx/certs/gateway.crt`, `ssl_protocols TLSv1.2 TLSv1.3` |
+| `nginx/Dockerfile` | `EXPOSE 80 443` |
+| `docker-compose.yml` | Gateway: `5090:443`; cert volume mount: `./certs/gateway.crt:/etc/nginx/certs/gateway.crt:ro` + key |
+| `YonetimApi/Endpoints/AuthEndpoints.cs` | `IsSecureRequest(ctx)`: `ctx.Request.IsHttps \|\| X-Forwarded-Proto==https`. `MakeCookieOpts(maxAge, secure)` + `SetCookies(..., secure)` + `ClearCookies(..., secure)` — tüm çağrıcılar güncellendi |
+| `KURULUM.md` | Bölüm 4: Self-signed + Let's Encrypt kurulum adımları; curl örnekleri `-k https://` olarak güncellendi |
+
+### Cookie Secure davranışı
+
+- `X-Forwarded-Proto: https` header'ı nginx tarafından `$scheme` ile set ediliyor (HTTPS → `https`)
+- `IsSecureRequest` bunu okuyarak `Secure = true` ayarlıyor
+- Dev (self-signed): tarayıcı uyarısını geç → cookie `Secure=true` gönderilir
+- HTTP'de (`5090:80` kaldırıldı): `Secure=false` — production'da HTTP erişimi olmamalı
+
+### Sertifika üretimi
+
+```bash
+bash certs/generate-certs.sh
+# Yeni: certs/gateway.crt + certs/gateway.key
+docker compose up --build -d gateway
+```
+
+### Doğrulama
+
+```bash
+curl -k https://localhost:5090/health
+# {"status":"healthy","service":"Gateway-Nginx"}
+```
+
+Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalışır.
+
+---
+
 ## SIRADAKİ ADIM
 
-- **Henüz push edilmeyen commit'ler**: `JWKS backchannel handler`, `gateway Dockerfile`, `setup-server.sh` güncellemeleri + `KURULUM.md` commit edildi ama push edilmedi. `git push origin main` + Linux'ta `git pull && docker compose up --build yonetimapi fileservice -d` ile tamamlanacak.
+- **Backup + Restore**: `tools/backup-files01.sh` (rsync export/ + pg_dump) + `tools/restore-test.sh` (hash doğrulama). `restore-tests/` dizini boş.
 - **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
 - **Sertifika rotasyonu**: Prod'da cert süresi dolmadan yenileme prosedürü (sıfır kesinti için rolling restart). Mevcut certler 825 gün geçerli.
-- **Keycloak admin güvenliği**: `/admin` konsolunu dış erişime kapatmak (firewall veya KC config).
+- **Fleet vehicle araması**: FlotaApi'ye `GET /api/vehicles?search=` endpoint'i eklenirse Dashboard'a araç listesi sidebar'ı eklenebilir (şu an yoktur — V2 adayı).
 
 ## Bilinen tuzaklar
 

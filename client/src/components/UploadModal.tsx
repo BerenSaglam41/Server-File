@@ -1,19 +1,23 @@
 import { useState, useRef, FormEvent } from 'react'
-import type { AuthState, Personnel, UploadRelationType } from '../types'
-import { UPLOAD_RELATION_TYPES } from '../types'
-import { uploadFile } from '../api'
+
+interface RelationType {
+  value: string
+  label: string
+}
 
 interface Props {
-  personnel: Personnel
-  auth: AuthState
+  entityDisplayName: string
+  relationTypes: readonly RelationType[]
+  uploadFn: (relationType: string, file: File, onProgress: (pct: number) => void) => Promise<void>
   onClose: () => void
   onUploaded: () => void
 }
 
-export default function UploadModal({ personnel, auth, onClose, onUploaded }: Props) {
-  const [relationType, setRelationType] = useState<UploadRelationType>(UPLOAD_RELATION_TYPES[0].value)
+export default function UploadModal({ entityDisplayName, relationTypes, uploadFn, onClose, onUploaded }: Props) {
+  const [relationType, setRelationType] = useState(relationTypes[0].value)
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState(0)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -21,13 +25,15 @@ export default function UploadModal({ personnel, auth, onClose, onUploaded }: Pr
     e.preventDefault()
     if (!file) return
     setUploading(true)
+    setProgress(0)
     setError('')
     try {
-      await uploadFile(personnel.personnelId, relationType, file)
+      await uploadFn(relationType, file, setProgress)
       onUploaded()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Yükleme hatası')
       setUploading(false)
+      setProgress(0)
     }
   }
 
@@ -47,7 +53,7 @@ export default function UploadModal({ personnel, auth, onClose, onUploaded }: Pr
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Dosya Yükle</h2>
-            <p className="text-xs text-gray-500">{personnel.displayName}</p>
+            <p className="text-xs text-gray-500">{entityDisplayName}</p>
           </div>
           <button
             onClick={onClose}
@@ -65,10 +71,10 @@ export default function UploadModal({ personnel, auth, onClose, onUploaded }: Pr
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Dosya Türü</label>
             <select
               value={relationType}
-              onChange={e => setRelationType(e.target.value as UploadRelationType)}
+              onChange={e => setRelationType(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white"
             >
-              {UPLOAD_RELATION_TYPES.map(rt => (
+              {relationTypes.map(rt => (
                 <option key={rt.value} value={rt.value}>{rt.label}</option>
               ))}
             </select>
@@ -123,6 +129,22 @@ export default function UploadModal({ personnel, auth, onClose, onUploaded }: Pr
             </div>
           </div>
 
+          {/* Progress bar */}
+          {uploading && (
+            <div>
+              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                <span>Yükleniyor…</span>
+                <span>{progress}%</span>
+              </div>
+              <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-brand-500 rounded-full transition-all duration-150"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           {error && (
             <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}
@@ -133,7 +155,8 @@ export default function UploadModal({ personnel, auth, onClose, onUploaded }: Pr
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2 border border-gray-300 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              disabled={uploading}
+              className="flex-1 py-2 border border-gray-300 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
             >
               İptal
             </button>

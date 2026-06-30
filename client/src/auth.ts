@@ -10,3 +10,7 @@ export function canWrite(auth: AuthState, personnelId: string): boolean {
   if (roles.includes('personnel.files.write.self') && auth.user.personnel_id === personnelId) return true
   return false
 }
+
+export function canVehicleWrite(auth: AuthState, vehicleId: string): boolean {
+  return !!auth.user.vehicle_id && auth.user.vehicle_id === vehicleId
+}

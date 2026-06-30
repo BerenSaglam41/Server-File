@@ -1,7 +1,11 @@
 # Dev-only port mapping'leri.
 # docker compose up → otomatik olarak bu dosyayı da yükler.
-# Production'da: docker compose -f docker-compose.yml up
+# Production'da: docker compose -f docker-compose.yml up (Keycloak 8080 dahil değil)
 services:
+  keycloak:
+    ports:
+      - "8080:8080"
+
   fileservice:
     ports:
       - "5205:8080"
