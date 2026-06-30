@@ -1,0 +1,3 @@
+# Private key'leri commit etme
+*.key
+ca.srl

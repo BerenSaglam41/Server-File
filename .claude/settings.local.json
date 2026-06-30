@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build *)",
+      "Bash(dotnet run *)",
+      "Bash(curl -s http://localhost:5205/internal/files/resolve?domain=personnel\\\\&entityType=personnel\\\\&entityId=test_personel_1\\\\&relationType=cv -H \"X-App-Code: yonetimapi\")",
+      "Bash(curl *)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(pkill -f \"dotnet.*YonetimApi\")",
+      "Bash(pkill -f \"dotnet.*FileServiceApi\")",
+      "Bash(psql *)",
+      "Bash(wait)",
+      "Bash(python3 -m json.tool)",
+      "Bash(dotnet-script /private/tmp/claude-501/-Users-mustafaberen41-Desktop-dosya-sistemi-projesi/1963d355-ff51-454f-ae00-4dbf4b63bc60/scratchpad/headertest.csx)",
+      "Bash(dotnet script *)",
+      "Bash(mkdir -p /private/tmp/claude-501/-Users-mustafaberen41-Desktop-dosya-sistemi-projesi/1963d355-ff51-454f-ae00-4dbf4b63bc60/scratchpad/headertest)",
+      "Bash(cat)",
+      "Bash(dotnet add package *)",
+      "Bash(docker compose *)",
+      "Bash(docker info *)",
+      "Bash(awk '{print $2}')",
+      "Bash(pkill -f \"YonetimApi\")",
+      "Bash(PGPASSWORD=\"\" psql *)"
+    ]
+  }
+}

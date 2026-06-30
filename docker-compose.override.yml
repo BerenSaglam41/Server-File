@@ -1,0 +1,15 @@
+# Dev-only port mapping'leri.
+# docker compose up → otomatik olarak bu dosyayı da yükler.
+# Production'da: docker compose -f docker-compose.yml up
+services:
+  fileservice:
+    ports:
+      - "5205:8080"
+
+  yonetimapi:
+    ports:
+      - "5076:8080"
+
+  flotaapi:
+    ports:
+      - "5077:8080"

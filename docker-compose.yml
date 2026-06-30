@@ -1,0 +1,168 @@
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: platformdb
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platformpass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/docker-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform -d platformdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    networks:
+      - platform-net
+
+  # ── Keycloak ───────────────────────────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    volumes:
+      - ./keycloak/realm-platform.json:/opt/keycloak/data/import/realm-platform.json
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/master HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - platform-net
+
+  # ── FileServiceApi ─────────────────────────────────────────────────────────
+  fileservice:
+    build:
+      context: ./FileServiceApi
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
+      FileStorage__ReadPath:    "/app/storage/export"
+      FileStorage__StagingPath: "/app/storage/staging"
+      FileStorage__ExportPath:  "/app/storage/export"
+      Keycloak__Authority: "http://localhost:8080/realms/platform"
+      Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
+      Keycloak__RequireHttpsMetadata: "false"
+      Mtls__ServerCertPath: "/certs/fileservice.crt"
+      Mtls__ServerKeyPath:  "/certs/fileservice.key"
+      Mtls__CaCertPath:     "/certs/ca.crt"
+      Mtls__AllowedClientCNs__0: "yonetimapi"
+      Mtls__AllowedClientCNs__1: "filoapi"
+    volumes:
+      - /Volumes/platform-files:/app/storage
+      - ./certs/fileservice.crt:/certs/fileservice.crt:ro
+      - ./certs/fileservice.key:/certs/fileservice.key:ro
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - platform-net
+
+  # ── YonetimApi ─────────────────────────────────────────────────────────────
+  yonetimapi:
+    build:
+      context: ./YonetimApi
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
+      FileService__BaseUrl: "https://fileservice:8080"
+      Keycloak__Authority: "http://localhost:8080/realms/platform"
+      Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
+      Keycloak__TokenUrl: "http://keycloak:8080/realms/platform/protocol/openid-connect/token"
+      Keycloak__ClientId: "yonetimapi"
+      Keycloak__ClientSecret: "yonetimapi-secret-v1"
+      Keycloak__RequireHttpsMetadata: "false"
+      Mtls__ClientCertPath: "/certs/yonetimapi.crt"
+      Mtls__ClientKeyPath:  "/certs/yonetimapi.key"
+      Mtls__CaCertPath:     "/certs/ca.crt"
+    volumes:
+      - ./certs/yonetimapi.crt:/certs/yonetimapi.crt:ro
+      - ./certs/yonetimapi.key:/certs/yonetimapi.key:ro
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    depends_on:
+      fileservice:
+        condition: service_started
+      keycloak:
+        condition: service_healthy
+    networks:
+      - platform-net
+
+  # ── FlotaApi ───────────────────────────────────────────────────────────────
+  flotaapi:
+    build:
+      context: ./FlotaApi
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
+      FileService__BaseUrl: "https://fileservice:8080"
+      Keycloak__Authority: "http://localhost:8080/realms/platform"
+      Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
+      Keycloak__TokenUrl: "http://keycloak:8080/realms/platform/protocol/openid-connect/token"
+      Keycloak__ClientId: "filoapi"
+      Keycloak__ClientSecret: "filoapi-secret"
+      Keycloak__RequireHttpsMetadata: "false"
+      Mtls__ClientCertPath: "/certs/filoapi.crt"
+      Mtls__ClientKeyPath:  "/certs/filoapi.key"
+      Mtls__CaCertPath:     "/certs/ca.crt"
+    volumes:
+      - ./certs/filoapi.crt:/certs/filoapi.crt:ro
+      - ./certs/filoapi.key:/certs/filoapi.key:ro
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    depends_on:
+      fileservice:
+        condition: service_started
+      keycloak:
+        condition: service_healthy
+    networks:
+      - platform-net
+
+  # ── Gateway ────────────────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: ./Gateway
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ReverseProxy__Routes__yonetimapi-root-route__ClusterId: "yonetimapi-cluster"
+      ReverseProxy__Routes__yonetimapi-root-route__Match__Path: "/api/personnel"
+      ReverseProxy__Routes__yonetimapi-route__ClusterId: "yonetimapi-cluster"
+      ReverseProxy__Routes__yonetimapi-route__Match__Path: "/api/personnel/{**catch-all}"
+      ReverseProxy__Clusters__yonetimapi-cluster__Destinations__yonetimapi__Address: "http://yonetimapi:8080/"
+      ReverseProxy__Routes__flotaapi-root-route__ClusterId: "flotaapi-cluster"
+      ReverseProxy__Routes__flotaapi-root-route__Match__Path: "/api/vehicles"
+      ReverseProxy__Routes__flotaapi-route__ClusterId: "flotaapi-cluster"
+      ReverseProxy__Routes__flotaapi-route__Match__Path: "/api/vehicles/{**catch-all}"
+      ReverseProxy__Clusters__flotaapi-cluster__Destinations__flotaapi__Address: "http://flotaapi:8080/"
+    ports:
+      - "5090:8080"
+    depends_on:
+      - yonetimapi
+      - flotaapi
+    networks:
+      - platform-net
+
+networks:
+  platform-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
+# .NET servisleri (FileServiceApi, YonetimApi, Gateway) artık container içinde çalışır.
+# Keycloak: host localhost:8080 üzerinden erişilebilir (token alma).
+# Servisler arası iletişim: Docker network içinde servis adı ile (keycloak, fileservice, vb).
+# JWT issuer: localhost:8080 (token'daki iss claim) — MetadataAddress ile JWKS keycloak:8080'den çekilir.

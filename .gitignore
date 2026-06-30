@@ -1,0 +1,54 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.swp
+
+# Private keys & certs (ASLA commit etme)
+certs/*.key
+certs/ca.srl
+certs/*.p12
+certs/*.pfx
+
+# Docker volumes / test storage binary'leri
+test-storage/export/
+test-storage/staging/
+test-storage/restore-tests/
+test-storage/manifests/
+# probe dosyası korunsun
+!test-storage/export/.probe
+
+# Node / Client
+client/node_modules/
+client/dist/
+client/.env
+client/.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+logs/
+
+# Ortam değişkenleri
+.env
+.env.local
+.env.*.local
+
+# JetBrains / VS Code
+.idea/
+*.iml
+.vscode/

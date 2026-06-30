@@ -1,0 +1,91 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Npgsql;
+using System.Security.Cryptography.X509Certificates;
+using YonetimApi.Endpoints;
+using YonetimApi.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddOpenApi();
+
+var dataSource = NpgsqlDataSource.Create(
+    builder.Configuration.GetConnectionString("PlatformDb")!);
+builder.Services.AddSingleton(dataSource);
+builder.Services.AddSingleton<IDomainAuditService, DomainAuditService>();
+builder.Services.AddSingleton<IPermissionService, PersonnelPermissionService>();
+
+// ── mTLS: FileService HttpClient — client sertifikası + CA doğrulaması ───────
+var clientCertPath = builder.Configuration["Mtls:ClientCertPath"];
+var clientKeyPath  = builder.Configuration["Mtls:ClientKeyPath"];
+var mtlsCaCertPath = builder.Configuration["Mtls:CaCertPath"];
+bool mtlsEnabled   = !string.IsNullOrEmpty(clientCertPath);
+
+builder.Services.AddHttpClient("FileService", client =>
+{
+    var baseUrl = builder.Configuration["FileService:BaseUrl"] ?? "http://localhost:5205";
+    client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+}).ConfigurePrimaryHttpMessageHandler(() =>
+{
+    if (!mtlsEnabled)
+        return new HttpClientHandler();
+
+    // Linux: PEM'den yükle → PKCS12'ye aktar → geri yükle (private key bağlaması için)
+    var raw  = X509Certificate2.CreateFromPemFile(clientCertPath!, clientKeyPath!);
+    var cert = new X509Certificate2(raw.Export(X509ContentType.Pkcs12));
+
+    var ca = new X509Certificate2(mtlsCaCertPath!);
+    var handler = new HttpClientHandler();
+    handler.ClientCertificates.Add(cert);
+    handler.ServerCertificateCustomValidationCallback = (_, serverCert, chain, _) =>
+    {
+        if (serverCert == null || chain == null) return false;
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(ca);
+        return chain.Build(serverCert);
+    };
+    return handler;
+});
+
+// TokenService'in Keycloak'a istek yapması için default HttpClient
+builder.Services.AddHttpClient();
+
+// YonetimApi'nin FileService'e göndereceği service token'ı önbellekli sağlar
+builder.Services.AddSingleton<ITokenService, KeycloakTokenService>();
+
+// Gelen client isteklerini doğrula (Keycloak'tan alınan user JWT)
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        var authority = builder.Configuration["Keycloak:Authority"]!;
+        options.Authority = authority;
+        // Docker'da JWKS keycloak:8080'den çekilir ama issuer localhost:8080 kalır.
+        options.MetadataAddress = builder.Configuration["Keycloak:MetadataAddress"]
+            ?? $"{authority}/.well-known/openid-configuration";
+        options.RequireHttpsMetadata = builder.Configuration.GetValue<bool>("Keycloak:RequireHttpsMetadata");
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+        {
+            ValidateAudience = false,
+            // MetadataAddress keycloak:8080'den keycloak:8080/... issuer döndürür;
+            // token ise localhost:8080 ile basılmıştır. İkisi de geçerli olsun.
+            ValidIssuers = new[] { authority },
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapPersonnelEndpoints();
+
+app.Run();

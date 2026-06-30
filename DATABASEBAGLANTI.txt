@@ -1,0 +1,2 @@
+Docker DataBase Baglanti 
+docker compose exec postgres psql -U platform -d platformdb
