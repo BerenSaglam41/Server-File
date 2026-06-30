@@ -137,6 +137,14 @@ services:
     networks:
       - platform-net
 
+  # ── Client (React SPA) ────────────────────────────────────────────────────
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    networks:
+      - platform-net
+
   # ── Gateway (Nginx) ────────────────────────────────────────────────────────
   gateway:
     image: nginx:alpine
@@ -147,6 +155,7 @@ services:
     depends_on:
       - yonetimapi
       - flotaapi
+      - client
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/health"]
       interval: 5s
