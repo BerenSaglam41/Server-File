@@ -3,20 +3,11 @@ export interface AuthUser {
   preferred_username: string
   personnel_id?: string
   roles: string[]
-  exp: number
 }
 
 export interface AuthState {
-  token: string
-  refreshToken: string
-  refreshExpiresAt: number
   user: AuthUser
-}
-
-export interface AuthTokens {
-  accessToken: string
-  refreshToken: string
-  refreshExpiresIn?: number
+  expiresAt: number   // Unix timestamp — access token expiry (from BFF response)
 }
 
 export interface Personnel {
@@ -34,7 +25,6 @@ export interface PersonnelFile {
   originalFileName: string | null
   extension: string
   sizeBytes: number
-  sha256: string
   classification: string
   status: string
   createdAt: string

@@ -23,7 +23,7 @@ export default function UploadModal({ personnel, auth, onClose, onUploaded }: Pr
     setUploading(true)
     setError('')
     try {
-      await uploadFile(personnel.personnelId, relationType, file, auth.token)
+      await uploadFile(personnel.personnelId, relationType, file)
       onUploaded()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Yükleme hatası')
@@ -39,10 +39,10 @@ export default function UploadModal({ personnel, auth, onClose, onUploaded }: Pr
 
   return (
     <div
-      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>

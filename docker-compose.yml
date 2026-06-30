@@ -84,6 +84,7 @@ services:
       Keycloak__TokenUrl: "http://keycloak:8080/realms/platform/protocol/openid-connect/token"
       Keycloak__ClientId: "yonetimapi"
       Keycloak__ClientSecret: "yonetimapi-secret-v1"
+      Keycloak__FrontendClientId: "frontend-test"
       Keycloak__RequireHttpsMetadata: "false"
       Mtls__ClientCertPath: "/certs/yonetimapi.crt"
       Mtls__ClientKeyPath:  "/certs/yonetimapi.key"

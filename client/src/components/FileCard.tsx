@@ -39,7 +39,7 @@ export default function FileCard({ file, personnelId, auth, writable, onArchived
     setDownloading(true)
     setError('')
     try {
-      const { blob, fileName } = await fetchFileBlob(personnelId, file.fileId, auth.token)
+      const { blob, fileName } = await fetchFileBlob(personnelId, file.fileId)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -59,9 +59,9 @@ export default function FileCard({ file, personnelId, auth, writable, onArchived
     setError('')
     try {
       if (SINGLE_PRIMARY_TYPES.has(file.relationType)) {
-        await archiveSinglePrimary(personnelId, file.relationType, auth.token)
+        await archiveSinglePrimary(personnelId, file.relationType)
       } else {
-        await archiveFile(personnelId, file.fileId, auth.token)
+        await archiveFile(personnelId, file.fileId)
       }
       onArchived()
     } catch (err) {

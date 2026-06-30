@@ -33,14 +33,14 @@ export default function PersonnelFileView({ personnel, auth, onBack }: Props) {
     setLoading(true)
     setError('')
     try {
-      const data = await getPersonnelFiles(personnel.personnelId, auth.token)
+      const data = await getPersonnelFiles(personnel.personnelId)
       setFiles(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Yükleme hatası')
     } finally {
       setLoading(false)
     }
-  }, [personnel.personnelId, auth.token])
+  }, [personnel.personnelId])
 
   useEffect(() => { loadFiles() }, [loadFiles])
 
@@ -49,36 +49,56 @@ export default function PersonnelFileView({ personnel, auth, onBack }: Props) {
   return (
     <div>
       {/* Personel header */}
-      <div className="flex items-start justify-between mb-6">
-        <div className="flex items-center gap-3">
+      <div className="flex items-start justify-between mb-5 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Geri — sadece mobilde görünür */}
           <button
             onClick={onBack}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors sm:hidden"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors sm:hidden flex-shrink-0"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">{personnel.displayName}</h2>
-            <p className="text-sm text-gray-500">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-gray-900 truncate">{personnel.displayName}</h2>
+            <p className="text-xs text-gray-500 truncate">
               {[personnel.title, personnel.department].filter(Boolean).join(' · ')}
-              <span className="ml-2 text-xs font-mono text-gray-400">{personnel.personnelId}</span>
+              <span className="ml-1.5 font-mono text-gray-400">{personnel.personnelId}</span>
             </p>
           </div>
         </div>
 
-        {writable && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Refresh */}
           <button
-            onClick={() => setShowUpload(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-xl transition-colors"
+            onClick={loadFiles}
+            disabled={loading}
+            className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-40"
+            title="Yenile"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            <svg
+              className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            Dosya Yükle
           </button>
-        )}
+
+          {writable && (
+            <button
+              onClick={() => setShowUpload(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-xl transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              <span className="hidden sm:inline">Dosya Yükle</span>
+              <span className="sm:hidden">Yükle</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Content */}

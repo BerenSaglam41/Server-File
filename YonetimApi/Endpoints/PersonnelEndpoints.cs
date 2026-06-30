@@ -100,7 +100,7 @@ public static class PersonnelEndpoints
         HttpRequest request, IHttpClientFactory httpClientFactory,
         ITokenService tokenService, IDomainAuditService audit, IPermissionService perm)
     {
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, clientIp, userAgent) = ExtractHeaders(request);
 
         if (!await perm.CanReadAsync(request.HttpContext.User, personnelId))
         {
@@ -109,7 +109,7 @@ public static class PersonnelEndpoints
         }
 
         var client = httpClientFactory.CreateClient("FileService");
-        var req = await BuildResolveRequestAsync(personnelId, relationType, actor, correlationId, tokenService);
+        var req = await BuildResolveRequestAsync(personnelId, relationType, actor, correlationId, tokenService, clientIp, userAgent);
         var response = await client.SendAsync(req);
         var body = await response.Content.ReadAsStringAsync();
 
@@ -134,7 +134,7 @@ public static class PersonnelEndpoints
         ITokenService tokenService, IDomainAuditService audit, IPermissionService perm)
     {
         var request = httpContext.Request;
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, clientIp, userAgent) = ExtractHeaders(request);
 
         if (!await perm.CanReadAsync(httpContext.User, personnelId))
         {
@@ -146,7 +146,7 @@ public static class PersonnelEndpoints
 
         var client = httpClientFactory.CreateClient("FileService");
 
-        var resolveReq = await BuildResolveRequestAsync(personnelId, relationType, actor, correlationId, tokenService);
+        var resolveReq = await BuildResolveRequestAsync(personnelId, relationType, actor, correlationId, tokenService, clientIp, userAgent);
         var resolveResp = await client.SendAsync(resolveReq);
 
         if (!resolveResp.IsSuccessStatusCode)
@@ -169,6 +169,8 @@ public static class PersonnelEndpoints
         contentReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         contentReq.Headers.Add("X-Actor-User-Id", actor);
         contentReq.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp  is not null) contentReq.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent is not null) contentReq.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
 
         if (request.Headers.TryGetValue("Range", out var rangeHeader))
             contentReq.Headers.TryAddWithoutValidation("Range", rangeHeader.ToString());
@@ -207,7 +209,7 @@ public static class PersonnelEndpoints
         HttpRequest request, IHttpClientFactory httpClientFactory,
         ITokenService tokenService, IDomainAuditService audit, IPermissionService perm)
     {
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, clientIp, userAgent) = ExtractHeaders(request);
 
         if (!await perm.CanWriteAsync(request.HttpContext.User, personnelId))
         {
@@ -245,6 +247,8 @@ public static class PersonnelEndpoints
         uploadReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         uploadReq.Headers.Add("X-Actor-User-Id",  actor);
         uploadReq.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp  is not null) uploadReq.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent is not null) uploadReq.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
 
         var response = await client.SendAsync(uploadReq);
         var body = await response.Content.ReadAsStringAsync();
@@ -261,7 +265,7 @@ public static class PersonnelEndpoints
         HttpRequest request, IHttpClientFactory httpClientFactory,
         ITokenService tokenService, IDomainAuditService audit, IPermissionService perm)
     {
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, clientIp, userAgent) = ExtractHeaders(request);
 
         if (!await perm.CanWriteAsync(request.HttpContext.User, personnelId))
         {
@@ -271,7 +275,7 @@ public static class PersonnelEndpoints
 
         var client = httpClientFactory.CreateClient("FileService");
 
-        var resolveReq = await BuildResolveRequestAsync(personnelId, relationType, actor, correlationId, tokenService);
+        var resolveReq = await BuildResolveRequestAsync(personnelId, relationType, actor, correlationId, tokenService, clientIp, userAgent);
         var resolveResp = await client.SendAsync(resolveReq);
 
         if (!resolveResp.IsSuccessStatusCode)
@@ -288,6 +292,8 @@ public static class PersonnelEndpoints
         archiveReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         archiveReq.Headers.Add("X-Actor-User-Id",  actor);
         archiveReq.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp  is not null) archiveReq.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent is not null) archiveReq.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
 
         var archiveResp = await client.SendAsync(archiveReq);
         var archiveBody = await archiveResp.Content.ReadAsStringAsync();
@@ -304,7 +310,7 @@ public static class PersonnelEndpoints
         IHttpClientFactory httpClientFactory, ITokenService tokenService,
         IDomainAuditService audit, IPermissionService perm)
     {
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, clientIp, userAgent) = ExtractHeaders(request);
 
         if (!await perm.CanReadAsync(request.HttpContext.User, personnelId))
         {
@@ -321,6 +327,8 @@ public static class PersonnelEndpoints
         listReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         listReq.Headers.Add("X-Actor-User-Id", actor);
         listReq.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp  is not null) listReq.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent is not null) listReq.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
 
         var response = await client.SendAsync(listReq);
         var body = await response.Content.ReadAsStringAsync();
@@ -339,7 +347,7 @@ public static class PersonnelEndpoints
         IPermissionService perm)
     {
         var user = request.HttpContext.User;
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, _, _) = ExtractHeaders(request);
         var q = "%" + (request.Query["search"].FirstOrDefault() ?? "").Trim() + "%";
 
         var roles = user.FindAll("roles").Select(c => c.Value).ToHashSet();
@@ -406,7 +414,7 @@ public static class PersonnelEndpoints
         ITokenService tokenService, IDomainAuditService audit, IPermissionService perm)
     {
         var request = httpContext.Request;
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, clientIp, userAgent) = ExtractHeaders(request);
 
         if (!await perm.CanReadAsync(httpContext.User, personnelId))
         {
@@ -419,7 +427,7 @@ public static class PersonnelEndpoints
         var client = httpClientFactory.CreateClient("FileService");
         var serviceToken = await tokenService.GetServiceTokenAsync();
 
-        if (!await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId))
+        if (!await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId, clientIp, userAgent))
         {
             await audit.WriteAsync(personnelId, actor, "PersonnelFileDownloaded", "denied", "file_scope_denied", correlationId);
             httpContext.Response.StatusCode = 403;
@@ -431,6 +439,8 @@ public static class PersonnelEndpoints
         contentReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         contentReq.Headers.Add("X-Actor-User-Id", actor);
         contentReq.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp  is not null) contentReq.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent is not null) contentReq.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
 
         if (request.Headers.TryGetValue("Range", out var range))
             contentReq.Headers.TryAddWithoutValidation("Range", range.ToString());
@@ -469,7 +479,7 @@ public static class PersonnelEndpoints
         HttpRequest request, IHttpClientFactory httpClientFactory,
         ITokenService tokenService, IDomainAuditService audit, IPermissionService perm)
     {
-        var (actor, correlationId) = ExtractHeaders(request);
+        var (actor, correlationId, clientIp, userAgent) = ExtractHeaders(request);
 
         if (!await perm.CanWriteAsync(request.HttpContext.User, personnelId))
         {
@@ -480,7 +490,7 @@ public static class PersonnelEndpoints
         var client = httpClientFactory.CreateClient("FileService");
         var serviceToken = await tokenService.GetServiceTokenAsync();
 
-        if (!await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId))
+        if (!await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId, clientIp, userAgent))
         {
             await audit.WriteAsync(personnelId, actor, "PersonnelFileArchived", "denied", "file_scope_denied", correlationId);
             return Results.Json(new { error = "forbidden", reason = "file_scope_denied" }, statusCode: 403);
@@ -490,6 +500,8 @@ public static class PersonnelEndpoints
         archiveReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         archiveReq.Headers.Add("X-Actor-User-Id", actor);
         archiveReq.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp  is not null) archiveReq.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent is not null) archiveReq.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
 
         var resp = await client.SendAsync(archiveReq);
         var body = await resp.Content.ReadAsStringAsync();
@@ -509,13 +521,17 @@ public static class PersonnelEndpoints
         return $"Personnel{pascal}{verb}";
     }
 
-    private static (string actor, string correlationId) ExtractHeaders(HttpRequest request)
+    private static (string actor, string correlationId, string? clientIp, string? userAgent) ExtractHeaders(HttpRequest request)
     {
         var actor = request.HttpContext.User.FindFirst("preferred_username")?.Value
                     ?? request.HttpContext.User.FindFirst("sub")?.Value
                     ?? "anonymous";
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault() ?? Guid.NewGuid().ToString();
-        return (actor, correlationId);
+        // nginx X-Real-IP → istemcinin gerçek IP'si (container iç IP'si değil)
+        var clientIp = request.Headers["X-Real-IP"].FirstOrDefault()
+                       ?? request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim();
+        var userAgent = request.Headers["User-Agent"].FirstOrDefault();
+        return (actor, correlationId, clientIp, userAgent);
     }
 
     private static string? GetPersonnelId(ClaimsPrincipal user)
@@ -533,7 +549,7 @@ public static class PersonnelEndpoints
 
     private static async Task<HttpRequestMessage> BuildResolveRequestAsync(
         string personnelId, string relationType,
-        string actor, string correlationId, ITokenService tokenService)
+        string actor, string correlationId, ITokenService tokenService, string? clientIp = null, string? userAgent = null)
     {
         var serviceToken = await tokenService.GetServiceTokenAsync();
         var req = new HttpRequestMessage(
@@ -543,6 +559,8 @@ public static class PersonnelEndpoints
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         req.Headers.Add("X-Actor-User-Id",  actor);
         req.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp   is not null) req.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent  is not null) req.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
         return req;
     }
 
@@ -552,22 +570,26 @@ public static class PersonnelEndpoints
         string personnelId,
         Guid fileId,
         string actor,
-        string correlationId)
+        string correlationId,
+        string? clientIp = null,
+        string? userAgent = null)
     {
         var serviceToken = await tokenService.GetServiceTokenAsync();
-        var listReq = new HttpRequestMessage(
+        var checkReq = new HttpRequestMessage(
             HttpMethod.Get,
-            $"internal/files/list?domain=personnel&entityType=personnel&entityId={Uri.EscapeDataString(personnelId)}");
-        listReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
-        listReq.Headers.Add("X-Actor-User-Id", actor);
-        listReq.Headers.Add("X-Correlation-Id", correlationId);
+            $"internal/files/ownership?fileId={fileId}&entityId={Uri.EscapeDataString(personnelId)}&entityType=personnel&domain=personnel");
+        checkReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
+        checkReq.Headers.Add("X-Actor-User-Id", actor);
+        checkReq.Headers.Add("X-Correlation-Id", correlationId);
+        if (clientIp  is not null) checkReq.Headers.TryAddWithoutValidation("X-Client-IP", clientIp);
+        if (userAgent is not null) checkReq.Headers.TryAddWithoutValidation("User-Agent",  userAgent);
 
-        var listResp = await client.SendAsync(listReq);
-        if (!listResp.IsSuccessStatusCode)
+        var resp = await client.SendAsync(checkReq);
+        if (!resp.IsSuccessStatusCode)
             return false;
 
-        var files = await listResp.Content.ReadFromJsonAsync<List<FileListItem>>();
-        return files?.Any(f => f.FileId == fileId) == true;
+        var result = await resp.Content.ReadFromJsonAsync<OwnershipResult>();
+        return result?.Owned == true;
     }
 
     private record FileResolveResult(
@@ -581,6 +603,6 @@ public static class PersonnelEndpoints
         [property: JsonPropertyName("classification")] string Classification,
         [property: JsonPropertyName("status")]         string Status);
 
-    private record FileListItem(
-        [property: JsonPropertyName("fileId")] Guid FileId);
+    private record OwnershipResult(
+        [property: JsonPropertyName("owned")] bool Owned);
 }

@@ -53,7 +53,7 @@ builder.Services.AddHttpClient();
 // YonetimApi'nin FileService'e göndereceği service token'ı önbellekli sağlar
 builder.Services.AddSingleton<ITokenService, KeycloakTokenService>();
 
-// Gelen client isteklerini doğrula (Keycloak'tan alınan user JWT)
+// Gelen client isteklerini doğrula: HttpOnly cookie "at" veya Authorization header
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -71,6 +71,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             // token ise localhost:8080 ile basılmıştır. İkisi de geçerli olsun.
             ValidIssuers = new[] { authority },
         };
+        // BFF: token önce "at" cookie'sinden okunur; curl testleri için header da desteklenir.
+        options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+        {
+            OnMessageReceived = ctx =>
+            {
+                if (string.IsNullOrEmpty(ctx.Token))
+                    ctx.Token = ctx.Request.Cookies["at"];
+                return Task.CompletedTask;
+            }
+        };
     });
 
 builder.Services.AddAuthorization();
@@ -86,6 +96,7 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapAuthEndpoints();
 app.MapPersonnelEndpoints();
 
 app.Run();

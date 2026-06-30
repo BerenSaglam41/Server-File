@@ -15,6 +15,7 @@ public static class FileEndpoints
 
         group.MapGet("/resolve", ResolveAsync);
         group.MapGet("/list", ListFilesAsync);
+        group.MapGet("/ownership", CheckOwnershipAsync);
         group.MapGet("/{fileId}/content", GetContentAsync);
         group.MapGet("/{fileId}", GetMetadataAsync);
         group.MapPost("", CreateFileAsync);
@@ -36,11 +37,13 @@ public static class FileEndpoints
     {
         var appCode = ExtractAppCode(request.HttpContext.User);
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
-        var actor = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var actor     = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var clientIp  = request.Headers["X-Client-IP"].FirstOrDefault();
+        var userAgent = request.Headers["User-Agent"].FirstOrDefault();
 
         if (string.IsNullOrEmpty(appCode))
         {
-            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId);
+            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId, clientIp, userAgent);
             return Results.Unauthorized();
         }
 
@@ -48,13 +51,13 @@ public static class FileEndpoints
 
         if (policy is null)
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "denied", "app_code_unknown", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "denied", "app_code_unknown", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
         if (!policy.CanRead || !policy.AllowedDomains.Contains(domain) || !policy.AllowedFileTypes.Contains(relationType))
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -68,7 +71,7 @@ public static class FileEndpoints
 
         if (reference is null)
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "reference_not_found", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "reference_not_found", correlationId, clientIp, userAgent);
             return Results.NotFound();
         }
 
@@ -78,11 +81,11 @@ public static class FileEndpoints
 
         if (fileObject is null || fileObject.Status != "active")
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "object_unavailable", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "object_unavailable", correlationId, clientIp, userAgent);
             return Results.NotFound();
         }
 
-        await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId);
+        await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId, clientIp, userAgent);
 
         return Results.Ok(new
         {
@@ -92,7 +95,6 @@ public static class FileEndpoints
             contentType = fileObject.ContentType,
             extension = fileObject.Extension,
             sizeBytes = fileObject.SizeBytes,
-            sha256 = fileObject.Sha256,
             classification = fileObject.Classification,
             status = fileObject.Status,
             etag = $"\"sha256:{fileObject.Sha256}\""
@@ -108,11 +110,13 @@ public static class FileEndpoints
     {
         var appCode = ExtractAppCode(request.HttpContext.User);
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
-        var actor = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var actor     = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var clientIp  = request.Headers["X-Client-IP"].FirstOrDefault();
+        var userAgent = request.Headers["User-Agent"].FirstOrDefault();
 
         if (string.IsNullOrEmpty(appCode))
         {
-            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId);
+            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId, clientIp, userAgent);
             return Results.Unauthorized();
         }
 
@@ -120,7 +124,7 @@ public static class FileEndpoints
 
         if (policy is null || !policy.CanRead)
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -128,17 +132,17 @@ public static class FileEndpoints
 
         if (fileObject is null || fileObject.Status != "active")
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "object_unavailable", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "object_unavailable", correlationId, clientIp, userAgent);
             return Results.NotFound();
         }
 
         if (!policy.AllowedDomains.Contains(fileObject.Domain))
         {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
-        await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId);
+        await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId, clientIp, userAgent);
 
         return Results.Ok(new
         {
@@ -148,7 +152,6 @@ public static class FileEndpoints
             extension = fileObject.Extension,
             originalFileName = fileObject.OriginalFileName,
             sizeBytes = fileObject.SizeBytes,
-            sha256 = fileObject.Sha256,
             classification = fileObject.Classification,
             status = fileObject.Status,
             createdAt = fileObject.CreatedAt,
@@ -167,11 +170,13 @@ public static class FileEndpoints
     {
         var appCode = ExtractAppCode(request.HttpContext.User);
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
-        var actor = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var actor     = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var clientIp  = request.Headers["X-Client-IP"].FirstOrDefault();
+        var userAgent = request.Headers["User-Agent"].FirstOrDefault();
 
         if (string.IsNullOrEmpty(appCode))
         {
-            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId);
+            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId, clientIp, userAgent);
             return Results.Unauthorized();
         }
 
@@ -179,7 +184,7 @@ public static class FileEndpoints
 
         if (policy is null || !policy.CanRead)
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -187,13 +192,13 @@ public static class FileEndpoints
 
         if (fileObject is null || fileObject.Status != "active")
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "object_unavailable", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "not_found", "object_unavailable", correlationId, clientIp, userAgent);
             return Results.NotFound();
         }
 
         if (!policy.AllowedDomains.Contains(fileObject.Domain))
         {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -201,10 +206,7 @@ public static class FileEndpoints
 
         var ifNoneMatch = request.Headers["If-None-Match"].FirstOrDefault();
         if (!string.IsNullOrEmpty(ifNoneMatch) && ifNoneMatch == etag)
-        {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", "not_modified", correlationId);
             return Results.StatusCode(304);
-        }
 
         var readPath = config["FileStorage:ReadPath"]!;
         var fullPath = Path.Combine(readPath, fileObject.RelativePath);
@@ -213,52 +215,33 @@ public static class FileEndpoints
         var normalizedRoot = Path.GetFullPath(readPath);
         if (!normalizedFull.StartsWith(normalizedRoot + Path.DirectorySeparatorChar))
         {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "error", "path_traversal_blocked", correlationId);
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "error", "path_traversal_blocked", correlationId, clientIp, userAgent);
             return Results.StatusCode(500);
         }
 
         if (!File.Exists(fullPath))
         {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "error", "binary_missing", correlationId);
-            return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
-        }
-
-        // Hash bütünlük kontrolü: disk ile katalog arasındaki SHA256 uyumsuzluğunu yakalar
-        try
-        {
-            using var hashStream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 65536, useAsync: true);
-            using var sha256 = System.Security.Cryptography.SHA256.Create();
-            var hashBytes = await sha256.ComputeHashAsync(hashStream);
-            var actualHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-            if (actualHash != fileObject.Sha256)
-            {
-                await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "error", "hash_mismatch", correlationId);
-                return Results.Json(new { error = "hash_mismatch" }, statusCode: 409);
-            }
-        }
-        catch (IOException)
-        {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "error", "storage_read_failed", correlationId);
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "error", "binary_missing", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
         }
 
         response.Headers["ETag"]          = etag;
         response.Headers["Accept-Ranges"] = "bytes";
 
-        var imageExtensions = new[] { "jpg", "jpeg", "png", "webp" };
-        if (imageExtensions.Contains(fileObject.Extension))
-        {
-            response.Headers["Content-Disposition"] = "inline";
-        }
-        else
-        {
-            var safeName = string.IsNullOrEmpty(fileObject.OriginalFileName)
-                ? $"file.{fileObject.Extension}"
-                : fileObject.OriginalFileName;
-            response.Headers["Content-Disposition"] = $"attachment; filename=\"{safeName}\"";
-        }
+        var rawName = string.IsNullOrEmpty(fileObject.OriginalFileName)
+            ? $"file.{fileObject.Extension}"
+            : fileObject.OriginalFileName;
+        // ASCII fallback: eski tarayıcılar için (non-ASCII ve " \ karakterleri _ ile değiştirilir)
+        var asciiFallback = new string(rawName.Select(c => (c < 128 && c != '"' && c != '\\') ? c : '_').ToArray());
+        // RFC 5987: modern tarayıcılar için tam Unicode destek
+        var encodedName = Uri.EscapeDataString(rawName);
 
-        await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId);
+        var imageExtensions = new[] { "jpg", "jpeg", "png", "webp" };
+        var disposition = imageExtensions.Contains(fileObject.Extension) ? "inline" : "attachment";
+        response.Headers["Content-Disposition"] =
+            $"{disposition}; filename=\"{asciiFallback}\"; filename*=UTF-8''{encodedName}";
+
+        await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId, clientIp, userAgent);
 
         var fileStream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read,
             bufferSize: 65536, useAsync: true);
@@ -274,11 +257,13 @@ public static class FileEndpoints
     {
         var appCode = ExtractAppCode(request.HttpContext.User);
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
-        var actor = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var actor     = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var clientIp  = request.Headers["X-Client-IP"].FirstOrDefault();
+        var userAgent = request.Headers["User-Agent"].FirstOrDefault();
 
         if (string.IsNullOrEmpty(appCode))
         {
-            await audit.WriteAsync(null, "unknown", actor, "create", "denied", "unauthenticated", correlationId);
+            await audit.WriteAsync(null, "unknown", actor, "create", "denied", "unauthenticated", correlationId, clientIp, userAgent);
             return Results.Unauthorized();
         }
 
@@ -286,7 +271,7 @@ public static class FileEndpoints
 
         if (policy is null || !policy.CanCreate)
         {
-            await audit.WriteAsync(null, appCode, actor, "create", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -307,13 +292,13 @@ public static class FileEndpoints
 
         if (!policy.AllowedDomains.Contains(domain) || !policy.AllowedFileTypes.Contains(relationType))
         {
-            await audit.WriteAsync(null, appCode, actor, "create", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
         if (file.Length > policy.MaxFileSizeBytes)
         {
-            await audit.WriteAsync(null, appCode, actor, "create", "denied", "file_too_large", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "denied", "file_too_large", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "file_too_large" }, statusCode: 413);
         }
 
@@ -322,13 +307,13 @@ public static class FileEndpoints
 
         if (!allowedExtensions.Contains(extension))
         {
-            await audit.WriteAsync(null, appCode, actor, "create", "denied", "unsupported_media_type", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "denied", "unsupported_media_type", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "unsupported_media_type" }, statusCode: 415);
         }
 
         if (!IsValidContentType(file.ContentType, extension))
         {
-            await audit.WriteAsync(null, appCode, actor, "create", "denied", "content_type_mismatch", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "denied", "content_type_mismatch", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "unsupported_media_type" }, statusCode: 415);
         }
 
@@ -336,7 +321,7 @@ public static class FileEndpoints
         {
             if (!await IsValidMagicBytesAsync(magicStream, extension))
             {
-                await audit.WriteAsync(null, appCode, actor, "create", "denied", "magic_byte_mismatch", correlationId);
+                await audit.WriteAsync(null, appCode, actor, "create", "denied", "magic_byte_mismatch", correlationId, clientIp, userAgent);
                 return Results.Json(new { error = "unsupported_media_type" }, statusCode: 415);
             }
         }
@@ -411,14 +396,38 @@ public static class FileEndpoints
         catch (IOException)
         {
             if (File.Exists(stagingFull)) File.Delete(stagingFull);
-            await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
         {
             if (File.Exists(stagingFull)) File.Delete(stagingFull);
-            await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
+        }
+
+        // Aynı binary daha önce bu entity/relationType altında yüklendiyse reddet.
+        // SaveChangesAsync henüz çağrılmadı; prevObj/prevRef EF tracker değişiklikleri atılır.
+        var existingDuplicateId = await db.References
+            .Join(db.Objects,
+                r => r.FileId,
+                o => o.FileId,
+                (r, o) => new { r, o })
+            .Where(x =>
+                x.r.EntityId     == entityId     &&
+                x.r.EntityType   == entityType   &&
+                x.r.RelationType == relationType &&
+                x.r.Status       == "active"     &&
+                x.o.Sha256       == sha256Hash   &&
+                x.o.Status       == "active")
+            .Select(x => (Guid?)x.o.FileId)
+            .FirstOrDefaultAsync();
+
+        if (existingDuplicateId.HasValue)
+        {
+            try { File.Delete(exportFull); } catch { /* best effort */ }
+            await audit.WriteAsync(null, appCode, actor, "create", "denied", "duplicate_file", correlationId, clientIp, userAgent);
+            return Results.Json(new { error = "duplicate_file", existingFileId = existingDuplicateId.Value }, statusCode: 409);
         }
 
         // 4. DB kayıtları — başarısız olursa export dosyasını geri al
@@ -462,11 +471,11 @@ public static class FileEndpoints
         {
             // Rollback: export'tan da sil; katalog tutarsız kalmasın
             if (File.Exists(exportFull)) File.Delete(exportFull);
-            await audit.WriteAsync(null, appCode, actor, "create", "error", "db_insert_failed", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "create", "error", "db_insert_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "internal_error" }, statusCode: 500);
         }
 
-        await audit.WriteAsync(fileId, appCode, actor, "create", "success", null, correlationId);
+        await audit.WriteAsync(fileId, appCode, actor, "create", "success", null, correlationId, clientIp, userAgent);
 
         return Results.Ok(new
         {
@@ -476,7 +485,6 @@ public static class FileEndpoints
             contentType = fileObject.ContentType,
             extension = fileObject.Extension,
             sizeBytes = fileObject.SizeBytes,
-            sha256 = fileObject.Sha256,
             classification = fileObject.Classification,
             status = fileObject.Status
         });
@@ -493,11 +501,13 @@ public static class FileEndpoints
     {
         var appCode = ExtractAppCode(request.HttpContext.User);
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
-        var actor = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var actor     = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var clientIp  = request.Headers["X-Client-IP"].FirstOrDefault();
+        var userAgent = request.Headers["User-Agent"].FirstOrDefault();
 
         if (string.IsNullOrEmpty(appCode))
         {
-            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId);
+            await audit.WriteAsync(null, "unknown", actor, "read", "denied", "unauthenticated", correlationId, clientIp, userAgent);
             return Results.Unauthorized();
         }
 
@@ -505,7 +515,7 @@ public static class FileEndpoints
 
         if (policy is null || !policy.CanRead || !policy.AllowedDomains.Contains(domain))
         {
-            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "read", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -531,7 +541,6 @@ public static class FileEndpoints
                 originalFileName = o.OriginalFileName,
                 extension    = o.Extension,
                 sizeBytes    = o.SizeBytes,
-                sha256       = o.Sha256,
                 classification = o.Classification,
                 status       = o.Status,
                 createdAt    = o.CreatedAt,
@@ -539,7 +548,43 @@ public static class FileEndpoints
             };
         }).ToList();
 
+        await audit.WriteAsync(null, appCode, actor, "read", "success", null, correlationId, clientIp, userAgent);
+
         return Results.Ok(items);
+    }
+
+    // ─── OWNERSHIP CHECK ─────────────────────────────────────────────────────
+    private static async Task<IResult> CheckOwnershipAsync(
+        HttpRequest request,
+        Guid fileId,
+        string entityId,
+        string entityType,
+        string domain,
+        AppDbContext db)
+    {
+        var appCode = ExtractAppCode(request.HttpContext.User);
+        if (string.IsNullOrEmpty(appCode))
+            return Results.Unauthorized();
+
+        var policy = await db.AppPolicies.FindAsync(appCode);
+        if (policy is null || !policy.CanRead || !policy.AllowedDomains.Contains(domain))
+            return Results.Json(new { error = "forbidden" }, statusCode: 403);
+
+        // references + objects join: hem referans hem nesne aktif, hem domain hem entityType eşleşmeli
+        var owned = await db.References
+            .Join(db.Objects,
+                r => r.FileId,
+                o => o.FileId,
+                (r, o) => new { r, o })
+            .AnyAsync(x =>
+                x.r.FileId     == fileId     &&
+                x.r.EntityId   == entityId   &&
+                x.r.EntityType == entityType &&
+                x.r.Status     == "active"   &&
+                x.o.Domain     == domain     &&
+                x.o.Status     == "active");
+
+        return Results.Ok(new { owned });
     }
 
     // ─── MAGIC-BYTE KONTROLÜ ─────────────────────────────────────────────────
@@ -601,11 +646,13 @@ public static class FileEndpoints
     {
         var appCode = ExtractAppCode(request.HttpContext.User);
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
-        var actor = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var actor     = request.Headers["X-Actor-User-Id"].FirstOrDefault();
+        var clientIp  = request.Headers["X-Client-IP"].FirstOrDefault();
+        var userAgent = request.Headers["User-Agent"].FirstOrDefault();
 
         if (string.IsNullOrEmpty(appCode))
         {
-            await audit.WriteAsync(null, "unknown", actor, "archive", "denied", "unauthenticated", correlationId);
+            await audit.WriteAsync(null, "unknown", actor, "archive", "denied", "unauthenticated", correlationId, clientIp, userAgent);
             return Results.Unauthorized();
         }
 
@@ -613,7 +660,7 @@ public static class FileEndpoints
 
         if (policy is null || !policy.CanArchive)
         {
-            await audit.WriteAsync(null, appCode, actor, "archive", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "archive", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -621,13 +668,13 @@ public static class FileEndpoints
 
         if (fileObject is null)
         {
-            await audit.WriteAsync(null, appCode, actor, "archive", "not_found", "object_not_found", correlationId);
+            await audit.WriteAsync(null, appCode, actor, "archive", "not_found", "object_not_found", correlationId, clientIp, userAgent);
             return Results.NotFound();
         }
 
         if (!policy.AllowedDomains.Contains(fileObject.Domain))
         {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "denied", "policy_denied", correlationId);
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
@@ -650,11 +697,11 @@ public static class FileEndpoints
         }
         catch
         {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "error", "db_update_failed", correlationId);
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "error", "db_update_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "internal_error" }, statusCode: 500);
         }
 
-        await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "success", null, correlationId);
+        await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "success", null, correlationId, clientIp, userAgent);
 
         return Results.Ok(new { fileId = fileObject.FileId, status = fileObject.Status });
     }

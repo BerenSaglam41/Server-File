@@ -20,14 +20,14 @@ export default function Dashboard({ auth, onLogout }: Props) {
     setSearching(true)
     setSearchError('')
     try {
-      const data = await searchPersonnel(q, auth.token)
+      const data = await searchPersonnel(q)
       setResults(data)
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : 'Arama hatası')
     } finally {
       setSearching(false)
     }
-  }, [auth.token])
+  }, [])
 
   // İlk açılışta tüm personeli yükle
   useEffect(() => { runSearch('') }, [runSearch])
@@ -47,7 +47,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
     <div className="min-h-screen flex flex-col">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-4">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 h-14 flex items-center gap-2 sm:gap-4">
           <div className="flex items-center gap-2 mr-4">
             <div className="w-7 h-7 rounded-lg bg-brand-600 flex items-center justify-center">
               <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -95,9 +95,9 @@ export default function Dashboard({ auth, onLogout }: Props) {
         </div>
       </header>
 
-      <div className="flex flex-1 max-w-6xl mx-auto w-full px-4 py-6 gap-6">
-        {/* Sidebar: personnel list */}
-        <aside className="w-72 flex-shrink-0">
+      <div className="flex flex-1 max-w-6xl mx-auto w-full px-4 py-4 sm:py-6 sm:gap-6">
+        {/* Sidebar: personnel list — mobilde seçim varsa gizle */}
+        <aside className={`${selected ? 'hidden sm:block' : 'block'} w-full sm:w-72 sm:flex-shrink-0`}>
           <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">
             Personel {results.length > 0 && `(${results.length})`}
           </p>
@@ -125,8 +125,8 @@ export default function Dashboard({ auth, onLogout }: Props) {
           </div>
         </aside>
 
-        {/* Main: file view */}
-        <main className="flex-1 min-w-0">
+        {/* Main: file view — mobilde seçim yoksa gizle */}
+        <main className={`${selected ? 'block' : 'hidden sm:block'} flex-1 min-w-0`}>
           {selected ? (
             <PersonnelFileView
               personnel={selected}

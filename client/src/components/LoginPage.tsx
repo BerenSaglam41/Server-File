@@ -1,9 +1,9 @@
 import { useState, FormEvent } from 'react'
-import { login } from '../api'
-import type { AuthTokens } from '../types'
+import { bffLogin } from '../api'
+import type { AuthState } from '../types'
 
 interface Props {
-  onLogin: (tokens: AuthTokens) => void
+  onLogin: (state: AuthState) => void
 }
 
 export default function LoginPage({ onLogin }: Props) {
@@ -17,8 +17,8 @@ export default function LoginPage({ onLogin }: Props) {
     setError('')
     setLoading(true)
     try {
-      const tokens = await login(username, password)
-      onLogin(tokens)
+      const state = await bffLogin(username, password)
+      onLogin(state)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Giriş başarısız')
     } finally {

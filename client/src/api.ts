@@ -1,63 +1,49 @@
-import type { AuthTokens, Personnel, PersonnelFile } from './types'
+import type { AuthState, Personnel, PersonnelFile } from './types'
 
-async function apiFetch(url: string, token: string, options: RequestInit = {}) {
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  return res
+async function apiFetch(url: string, options: RequestInit = {}) {
+  return fetch(url, { ...options, credentials: 'include' })
 }
 
-export async function login(username: string, password: string): Promise<AuthTokens> {
-  const res = await fetch('/realms/platform/protocol/openid-connect/token', {
+// ─── BFF AUTH ────────────────────────────────────────────────────────────────
+
+export async function bffLogin(username: string, password: string): Promise<AuthState> {
+  const res = await fetch('/api/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'password',
-      client_id:  'frontend-test',
-      username,
-      password,
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ username, password }),
   })
   if (!res.ok) throw new Error('Kullanıcı adı veya şifre hatalı')
-  const data = await res.json()
-  return {
-    accessToken: data.access_token as string,
-    refreshToken: data.refresh_token as string,
-    refreshExpiresIn: data.refresh_expires_in as number | undefined,
-  }
+  return parseBffResponse(await res.json())
 }
 
-export async function refreshLogin(refreshToken: string): Promise<AuthTokens> {
-  const res = await fetch('/realms/platform/protocol/openid-connect/token', {
+export async function bffRefresh(): Promise<AuthState> {
+  const res = await fetch('/api/auth/refresh', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id:  'frontend-test',
-      refresh_token: refreshToken,
-    }),
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('Oturum süresi doldu')
-  const data = await res.json()
-  return {
-    accessToken: data.access_token as string,
-    refreshToken: (data.refresh_token as string | undefined) ?? refreshToken,
-    refreshExpiresIn: data.refresh_expires_in as number | undefined,
-  }
+  return parseBffResponse(await res.json())
 }
 
-export async function searchPersonnel(q: string, token: string): Promise<Personnel[]> {
-  const res = await apiFetch(`/api/personnel?search=${encodeURIComponent(q)}`, token)
+export async function bffLogout(): Promise<void> {
+  await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+}
+
+function parseBffResponse(data: { user: AuthState['user']; expiresAt: number }): AuthState {
+  return { user: data.user, expiresAt: data.expiresAt }
+}
+
+// ─── PERSONNEL ───────────────────────────────────────────────────────────────
+
+export async function searchPersonnel(q: string): Promise<Personnel[]> {
+  const res = await apiFetch(`/api/personnel?search=${encodeURIComponent(q)}`)
   if (!res.ok) throw new Error('Arama başarısız')
   return res.json()
 }
 
-export async function getPersonnelFiles(personnelId: string, token: string): Promise<PersonnelFile[]> {
-  const res = await apiFetch(`/api/personnel/${encodeURIComponent(personnelId)}/files`, token)
+export async function getPersonnelFiles(personnelId: string): Promise<PersonnelFile[]> {
+  const res = await apiFetch(`/api/personnel/${encodeURIComponent(personnelId)}/files`)
   if (res.status === 403) throw new Error('Bu personele erişim yetkiniz yok')
   if (!res.ok) throw new Error('Dosyalar alınamadı')
   return res.json()
@@ -71,42 +57,32 @@ export async function uploadFile(
   personnelId: string,
   relationType: string,
   file: File,
-  token: string
 ): Promise<void> {
   const form = new FormData()
   form.append('file', file)
-  const res = await apiFetch(`/api/personnel/${encodeURIComponent(personnelId)}/${toUrlSegment(relationType)}`, token, {
-    method: 'POST',
-    body: form,
-  })
+  const res = await apiFetch(
+    `/api/personnel/${encodeURIComponent(personnelId)}/${toUrlSegment(relationType)}`,
+    { method: 'POST', body: form }
+  )
   if (res.status === 415) throw new Error('Desteklenmeyen dosya formatı (PDF, JPG, PNG, WebP)')
   if (res.status === 413) throw new Error('Dosya çok büyük (maks. 10MB)')
   if (res.status === 403) throw new Error('Bu işlem için yetkiniz yok')
+  if (res.status === 409) throw new Error('Bu dosya zaten yüklü')
   if (!res.ok) throw new Error('Yükleme başarısız')
 }
 
-export async function archiveFile(
-  personnelId: string,
-  fileId: string,
-  token: string
-): Promise<void> {
+export async function archiveFile(personnelId: string, fileId: string): Promise<void> {
   const res = await apiFetch(
     `/api/personnel/${encodeURIComponent(personnelId)}/files/${fileId}/archive`,
-    token,
     { method: 'POST' }
   )
   if (res.status === 403) throw new Error('Arşivleme için yetkiniz yok')
   if (!res.ok) throw new Error('Arşivleme başarısız')
 }
 
-export async function archiveSinglePrimary(
-  personnelId: string,
-  relationType: string,
-  token: string
-): Promise<void> {
+export async function archiveSinglePrimary(personnelId: string, relationType: string): Promise<void> {
   const res = await apiFetch(
     `/api/personnel/${encodeURIComponent(personnelId)}/${toUrlSegment(relationType)}/archive`,
-    token,
     { method: 'POST' }
   )
   if (res.status === 403) throw new Error('Arşivleme için yetkiniz yok')
@@ -116,17 +92,19 @@ export async function archiveSinglePrimary(
 export async function fetchFileBlob(
   personnelId: string,
   fileId: string,
-  token: string
 ): Promise<{ blob: Blob; contentType: string; fileName: string }> {
   const res = await apiFetch(
-    `/api/personnel/${encodeURIComponent(personnelId)}/files/${fileId}/content`,
-    token
+    `/api/personnel/${encodeURIComponent(personnelId)}/files/${fileId}/content`
   )
   if (!res.ok) throw new Error('İndirme başarısız')
-  const blob = await res.blob()
+  const blob        = await res.blob()
   const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
-  const cd = res.headers.get('content-disposition') ?? ''
-  const nameMatch = cd.match(/filename="?([^";]+)"?/)
-  const fileName = nameMatch ? nameMatch[1] : `dosya.${contentType.split('/')[1] ?? 'bin'}`
+  const cd          = res.headers.get('content-disposition') ?? ''
+  const rfc5987Match = cd.match(/filename\*=UTF-8''([^;\s]+)/i)
+  const legacyMatch  = cd.match(/filename="([^"]+)"/)
+  const rawFileName  = rfc5987Match
+    ? decodeURIComponent(rfc5987Match[1])
+    : legacyMatch ? legacyMatch[1] : null
+  const fileName = rawFileName ?? `dosya.${contentType.split('/')[1] ?? 'bin'}`
   return { blob, contentType, fileName }
 }

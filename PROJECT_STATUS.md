@@ -4,6 +4,11 @@ Bu dosya, File-Service API / YonetimAPI projesinin şu ana kadar nereye geldiği
 sırada ne olduğunu anlatır. Yeni bir Claude oturumuna bu dosyayı ve aşağıda listelenen
 5 .md dosyasını verirsen, tam olarak nereden devam edeceğini bilir.
 
+## Sistem mimarisini anlamak için
+
+Tüm katmanları (auth, storage, RBAC, audit, dosya akışı) baştan sona açıklayan referans doküman:
+→ **`MIMARI.md`**
+
 ## Okuman gereken kaynak dosyalar (proje kararları buradan geliyor)
 
 Bu 5 doküman, projenin mimari kararlarının kaynağı. Kod buradaki kararları uygular,
@@ -138,7 +143,7 @@ curl -H "Authorization: Bearer $USER_TOKEN" http://localhost:5090/api/personnel/
 curl http://localhost:5090/health
 ```
 
-## FileServiceApi — 6 endpoint (tümü test edildi)
+## FileServiceApi — 7 endpoint (tümü test edildi)
 
 ### `GET /internal/files/resolve` ✅
 Query: `domain`, `entityType`, `entityId`, `relationType`. Headers: `Authorization: Bearer <JWT>` (zorunlu), `X-Correlation-Id`, `X-Actor-User-Id`.
@@ -165,16 +170,23 @@ Binary stream. `Results.Stream()` kullanılıyor (`Results.File()` değil — Ph
 mtime'ından kendi ETag'ını üretip bizimkini ezerdi).
 
 Kontrol sırası: JWT `app_code` claim → policy.can_read → object active mi → policy domain → path traversal kontrolü
-→ If-None-Match == ETag ise 304 → disk'te dosya var mı (503) → header'ları set et → stream et.
+→ If-None-Match == ETag ise **304 (audit yazmadan)** → disk'te dosya var mı (503) → header'ları set et → stream et.
 
 Özellikler:
 - SHA256 tabanlı ETag: `"sha256:<hash>"`
-- If-None-Match → 304 Not Modified
+- If-None-Match → 304 Not Modified (audit log yazılmaz — cache hit)
 - Content-Disposition: resimler `inline`, dökümanlar `attachment; filename="<originalFileName>"`
 - Path traversal koruması: `Path.GetFullPath()` ile root boundary kontrolü
 - Range / 206 Partial Content: `enableRangeProcessing: true`
+- **SHA256 re-hesaplama kaldırıldı** — hash upload anında staging'den hesaplanıp DB'ye kaydedilir; indirmede disk iki kez okunmaz
 
 Test: 200, 206, 304, 401, 403, 404, 503.
+
+### `GET /internal/files/ownership` ✅
+Lightweight ownership check. Query: `fileId`, `entityId`. Tek DB sorgusu: `References.AnyAsync`.
+YonetimApi'nin `FileBelongsToPersonnelAsync` helper'ı tarafından kullanılır — tüm dosya listesi yerine tek satır sorgu.
+
+Test: 200 `{owned:true}`, 200 `{owned:false}`, 401, 403.
 
 ### `POST /internal/files` ✅
 Multipart form-data upload. Form alanları: `file`, `domain`, `entityType`, `entityId`, `relationType`,
@@ -218,6 +230,8 @@ Query: `domain`, `entityType`, `entityId`. Headers: `Authorization: Bearer <JWT>
 Filtre: `references.is_primary = true AND references.status = active AND objects.status = active`.
 Response: aynı entity'nin CV ve fotoğrafı varsa her ikisi de dizide döner.
 
+Başarılı liste dönüşünde `files.audit_events`'e `action=read, result=success` yazılır (2026-06-30 eklendi).
+
 Test: 200 (liste), 401, 403.
 
 ### Kritik not — AuditService fileId kuralı
@@ -225,6 +239,23 @@ Test: 200 (liste), 401, 403.
 `fileId` parametresi, sadece nesnenin DB'de GERÇEKTEN var olduğu kesinleştikten **sonra** geçilmeli.
 Öncesinde `null` geçilmeli. Sebep: `audit_events.file_id` üzerinde FK var (`files.objects`), var olmayan
 UUID geçmek `DbUpdateException` fırlatır. Bu hata bir kez yaşandı, düzeltildi.
+
+### Audit uyumluluk durumu (2026-06-30 kontrol edildi)
+
+MD gereksinimleri (`file-catalog-model.md` + `file-service-api-contract.md`) ile karşılaştırıldı:
+
+| Kontrol | Durum |
+|---|---|
+| Tüm `action` değerleri CHECK constraint'e uyuyor (`create/read/archive/delete_attempt`) | ✅ |
+| Tüm `result` değerleri CHECK constraint'e uyuyor (`success/denied/not_found/error`) | ✅ |
+| `resolve` → her sonuçta audit yazıyor | ✅ |
+| `metadata` → her sonuçta audit yazıyor | ✅ |
+| `content` → her sonuçta audit yazıyor (304 hariç) | ✅ |
+| `create` → her sonuçta audit yazıyor | ✅ |
+| `list` → başarılı sonuçta audit yazıyor | ✅ (düzeltildi) |
+| `archive` → her sonuçta audit yazıyor | ✅ |
+| `ownership` → iç endpoint, audit gereksiz | ✅ (bilinçli) |
+| `actor_ip` / `user_agent` sütunları — DB şemasında var | ✅ doldurulur (2026-06-30 tamamlandı; IP zinciri: nginx → YonetimApi → FileServiceApi → AuditService) |
 
 ## YonetimApi — 16 endpoint
 
@@ -407,18 +438,24 @@ YARP (.NET) gateway, `nginx:alpine` imajıyla değiştirildi. Build adımı yok;
 Secret: `filoapi-secret`. Mevcut instance'da secret uyumsuzluğu `kcadm.sh` ile düzeltildi.
 `docker compose down -v && up` sonrasında otomatik import edilir.
 
-## Hash Verification (TAMAMLANDI ✅)
+## Hash Verification ve İndirme Optimizasyonları (GÜNCELLENDİ)
 
-`FileServiceApi/Endpoints/FileEndpoints.cs` → `GetContentAsync`:
+SHA256 hash yükleme anında staging dosyasından hesaplanır ve `objects.sha256` sütununa kaydedilir.
+İndirme sırasında hash **yeniden hesaplanmaz** — disk iki kez okunmaz.
 
-Dosya binary'si diskten okunmadan önce SHA256 doğrulaması yapılıyor:
-- Disk'teki hash ≠ DB'deki `objects.sha256` → 409 `hash_mismatch` + audit kaydı
-- Binary disk'te yoksa → 503 `storage_unavailable`
+**Kaldırılan:** `GetContentAsync` içindeki per-download SHA256 re-hash bloğu.
+- Neden: Hash upload akışında staging→export zincirinde zaten doğrulanıyor; indirmede tekrar okumak dosya başına disk yükünü iki katına çıkarıyor.
+- Güvence: `File.Exists()` kontrolü ve `Results.Stream()` IOException koruması korunuyor.
+- ETag (`"sha256:<hash>"`) hâlâ yanıtta gönderiliyor — client tarafı bütünlük doğrulaması için kullanılabilir.
+
+**Diğer optimizasyonlar aynı commit'te:**
+- 304 yanıtlarında audit log yazılmıyor (cache hit = gerçek veri erişimi yok)
+- `FileBelongsToPersonnelAsync` tüm dosya listesi yerine `GET /internal/files/ownership` endpoint'ini kullanıyor (tek satır DB sorgusu)
 
 Test sonuçları (BIN-1/2/3):
 - Normal indirme: ✅ 200
-- Binary missing: ✅ 503
-- Hash mismatch: ✅ 409
+- Binary missing (File.Exists false): ✅ 503
+- Hash mismatch artık test edilmiyor (per-download check kaldırıldı)
 
 ## Health Check (TAMAMLANDI ✅)
 
@@ -1028,14 +1065,14 @@ FileId bazlı indirme/arşivleme akışında personel bağlamı doğrulandı. `Y
 
 - Upload şu an iki katmandan geçiyor: Client → Gateway → YonetimApi → FileService. YonetimApi `ReadFormAsync` ile dosyayı alıp tekrar multipart olarak FileService'e gönderiyor; FileService de formu tekrar okuyor. Büyük dosyada gecikmenin ana sebeplerinden biri bu çift proxy/buffer akışı.
 - FileService upload sırasında dosyayı staging'e yazar, sonra SHA256 için staging dosyasını tekrar okur, sonra export'a taşır. Bu doğruluk için iyi ama büyük dosyada ikinci disk okuması maliyetlidir.
-- Download tarafında `GetContentAsync` her içerik isteğinde dosyayı komple SHA256 hesaplayarak doğruluyor. Bu hash mismatch testini güçlü yapar ama büyük dosyalarda indirme başlamadan gecikme yaratır.
+- Download tarafında `GetContentAsync` per-download SHA256 re-hash kaldırıldı (2026-06-30). Hash sadece upload anında hesaplanıyor.
 - Docker dev ortamında staging ve export aynı bind volume altında çalışıyor. Gerçek Files-01 modelinde staging'in FileService runtime host'unda yerel, export'un Files-01 tarafında olması daha hızlı ve stale NFS riskini azaltır.
 
 **Hızlandırma için güvenli V2 adayları:**
 
 1. YonetimApi upload proxy'sini streaming multipart forward'a çevirmek.
 2. Upload sırasında SHA256'i dosya yazılırken hesaplamak; staging dosyasını ikinci kez okumamak.
-3. Download'da her istekte tam hash yerine ETag/DB hash'e güvenmek; hash doğrulamayı background audit/health probe veya opsiyonel verify endpoint'e taşımak.
+3. ~~Download'da her istekte tam hash yerine ETag/DB hash'e güvenmek~~ — **TAMAMLANDI (2026-06-30)**
 4. Client upload progress bar ve timeout/error mesajlarını iyileştirmek; büyük dosyada "site çöktü" hissini azaltmak.
 5. Dev compose'ta staging'i NFS/bind export'tan ayırmak; staging için container-local veya ayrı local volume kullanmak.
 
@@ -1043,6 +1080,51 @@ FileId bazlı indirme/arşivleme akışında personel bağlamı doğrulandı. `Y
 
 - Fleet/Flota UI yok; `FlotaApi` backend consumer olarak mevcut.
 - Production frontend hosting imajı henüz eklenmedi; client şu an Vite dev/build çıktısı olarak hazır (gateway nginx'i ile karıştırılmamalı — gateway nginx:alpine ayrı servis).
+
+## Content-Disposition ve İndirme İsmi Düzeltmeleri (2026-06-30)
+
+### Bug 1 — Türkçe dosya adı → 500
+
+**Hata:** `GET /api/personnel/{id}/files/{fileId}/content` → 500 Internal Server Error.
+
+**Kök neden:** `GetContentAsync` içinde `Content-Disposition` header'ına `originalFileName` doğrudan yazılıyordu. Türkçe karakter içeren dosya adlarında (ı, ş, ğ, ü, ö, ç, İ) .NET `InvalidOperationException: Invalid non-ASCII or control character in header: 0x0131` fırlatıyor. HTTP header'larına RFC 7230 gereği yalnızca ASCII karakterler yazılabilir.
+
+**Düzeltme (FileServiceApi):** RFC 5987 `filename*=UTF-8''<percent-encoded>` formatı.
+```csharp
+var encodedName = Uri.EscapeDataString(rawName);
+response.Headers["Content-Disposition"] = $"attachment; filename*=UTF-8''{encodedName}";
+```
+
+### Bug 2 — Fotoğraf ve belge isimsiz iniyordu
+
+**Hata:** CV kendi adıyla iniyordu; fotoğraf ve belgeler `dosya.uzantı` adıyla iniyordu.
+
+**Kök neden (2 ayrı sebep):**
+
+| Tür | Problem |
+|---|---|
+| Fotoğraf (jpg/png/webp) | `Content-Disposition: inline` yazılıyordu — filename hiç eklenmiyordu |
+| Belge/PDF | RFC 5987 formatına (`filename*=UTF-8''...`) geçildi ama `api.ts` regex'i sadece eski `filename="..."` formatını anlıyordu |
+
+**Düzeltme 1 (FileServiceApi):** Resimler dahil tüm türlere `filename*` eklendi; resimler yine `inline` (tarayıcıda görüntülenir) ama kaydedilirken doğru isim gelir.
+```csharp
+if (imageExtensions.Contains(fileObject.Extension))
+    response.Headers["Content-Disposition"] = $"inline; filename*=UTF-8''{encodedName}";
+else
+    response.Headers["Content-Disposition"] = $"attachment; filename*=UTF-8''{encodedName}";
+```
+
+**Düzeltme 2 (client/src/api.ts):** `fetchFileBlob` RFC 5987 formatını önce deniyor, bulamazsa eski formata bakıyor.
+```ts
+const rfc5987Match = cd.match(/filename\*=UTF-8''([^;\s]+)/i)
+const legacyMatch  = cd.match(/filename="([^"]+)"/)
+const rawFileName  = rfc5987Match
+  ? decodeURIComponent(rfc5987Match[1])
+  : legacyMatch ? legacyMatch[1] : null
+const fileName = rawFileName ?? `dosya.${contentType.split('/')[1] ?? 'bin'}`
+```
+
+**Sonuç:** CV, fotoğraf ve tüm belge türleri yüklendiği orijinal isimle iner. Türkçe karakterli isimler de doğru çalışır.
 
 ## Client UI — Son Düzeltmeler (2026-06-30)
 
@@ -1064,8 +1146,137 @@ Düzeltme: `toUrlSegment()` helper eklendi; `relationType.replace(/_/g, '-')` UR
 | `official_document` upload URL | ✅ `/official-document` olarak iletiliyor |
 | `official_document` archive URL | ✅ `/official-document/archive` olarak iletiliyor |
 
+## Duplicate Dosya Kontrolü (TAMAMLANDI ✅ — 2026-06-30)
+
+`CreateFileAsync` içinde, SHA256 hesaplandıktan ve staging→export taşındıktan **sonra**, DB yazımından **önce** duplicate kontrolü eklendi.
+
+**Kural:** Aynı `(entityId, entityType, relationType, sha256)` dörtlüsü ve her ikisi `active` olan bir `reference + object` varsa upload reddedilir.
+
+- HTTP `409 Conflict` + `{ "error": "duplicate_file", "existingFileId": "<guid>" }` döner.
+- Export dosyası silinir (staging→export taşınmıştı; best-effort delete ile geri alınır).
+- EF tracker'daki `prevObj/prevRef` değişiklikleri `SaveChangesAsync` çağrılmadan atılır — eski dosyaya dokunulmaz.
+- Single-primary (cv, photo) ve multi-primary (document, attachment) için eşit biçimde uygulanır. Aynı binary'i iki kez yüklemek hiçbir senaryoda istenen davranış değil.
+- Audit: `action=create, result=denied, reason_code=duplicate_file`.
+
+Test senaryoları:
+- Aynı PDF'i aynı personele iki kez yükle → ilki 200, ikincisi 409 + `existingFileId`
+- `existingFileId` listedeki gerçek fileId ile eşleşiyor mu → kontrol et
+- Farklı PDF'i aynı personele yükle → 200 (farklı SHA256)
+- Aynı PDF'i farklı personele yükle → 200 (farklı entityId)
+
+## HttpOnly Cookie BFF Auth (TAMAMLANDI ✅ — 2026-06-30)
+
+localStorage'daki JWT token XSS ile çalınabiliyordu. BFF (Backend For Frontend) pattern ile token'lar artık JS'in göremeyeceği HttpOnly cookie'lerde tutuluyor.
+
+### Mimari
+
+```
+Eski: Client → Keycloak (password grant) → JWT JSON → localStorage → Authorization: Bearer
+Yeni: Client → /api/auth/login (YonetimApi BFF) → Keycloak → HttpOnly cookie "at" + "rt"
+      Sonraki istekler → cookie otomatik gönderilir → Authorization header yok
+```
+
+### Değişen bileşenler
+
+**YonetimApi:**
+- `Endpoints/AuthEndpoints.cs` (yeni) — `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout`
+  - Login: `{username, password}` alır → Keycloak password grant → `at` + `rt` HttpOnly cookie → `{user, expiresAt}` JSON döner
+  - Refresh: `rt` cookie'sini okur → Keycloak refresh grant → cookie günceller → `{user, expiresAt}` döner
+  - Logout: cookie'leri siler
+- `Program.cs` — JWT Bearer `OnMessageReceived`: `at` cookie'sinden token okunur (Authorization header da desteklenir — curl testleri için)
+- `appsettings.json` + `docker-compose.yml` — `Keycloak:FrontendClientId: frontend-test` eklendi
+
+**nginx:**
+- `/api/auth/` → yonetimapi rotası eklendi
+
+**Client:**
+- `types.ts` — `AuthState`: `{user, expiresAt}` (token/refreshToken kaldırıldı). `AuthTokens` interface silindi. `AuthUser.exp` kaldırıldı.
+- `auth.ts` — localStorage/sessionStorage kodu kaldırıldı. `isAccessTokenFresh` ve `canWrite` kaldı.
+- `api.ts` — `login`/`refreshLogin` → `bffLogin`/`bffRefresh`/`bffLogout`. Tüm fonksiyonlardan `token` parametresi kaldırıldı. `apiFetch` → `credentials: 'include'`. `/realms` doğrudan çağrısı yok.
+- `App.tsx` — Sayfa yüklenince `bffRefresh()` → oturum geri yükleme. Proaktif refresh `expiresAt`'e göre zamanlanır. Logout → `bffLogout()`.
+- Tüm component'ler — `auth.token` pass'leri kaldırıldı.
+- `vite.config.ts` — `/realms` proxy kaldırıldı (artık Keycloak'a doğrudan gidilmiyor).
+
+### Cookie ayarları
+- `HttpOnly: true` — JS okuyamaz (XSS koruması)
+- `SameSite: Strict` — CSRF koruması
+- `Secure: false` (dev); prod'da `true` yapılmalı (HTTPS gerektirir)
+- `Path: /api` — yalnız API isteklerinde gönderilir
+- `at` → access token ömrü kadar (Keycloak `expires_in`)
+- `rt` → refresh token ömrü kadar (Keycloak `refresh_expires_in`)
+
+### Neden güvenlik arttı
+- Token JS tarafından **okunamaz** → XSS ile çalınamaz
+- `localStorage.getItem('auth')` → artık boş
+- Keycloak URL'i ve `frontend-test` client_id'si client bundle'a gömülmüyor
+
+### Build doğrulama
+| Kontrol | Sonuç |
+|---|---|
+| `npm run build` (TypeScript + Vite) | ✅ 0 hata |
+| `dotnet build YonetimApi` | ✅ 0 hata |
+
+### Test senaryoları
+- `POST /api/auth/login` `{username: "hr001", password: "Demo1234!"}` → 200 + cookie set
+- `POST /api/auth/refresh` (rt cookie mevcut) → 200 + cookie güncelleme
+- `POST /api/auth/refresh` (rt cookie yok) → 401
+- `POST /api/auth/logout` → cookie silindi, sonraki istek 401
+- Browser DevTools → localStorage boş, `at` ve `rt` cookie'leri HttpOnly işaretli
+- Sayfa yenilenince oturum korunuyor (rt cookie → refresh → session restore)
+
+## actor_ip / user_agent IP Takip Zinciri (TAMAMLANDI ✅ — 2026-06-30)
+
+`files.audit_events.actor_ip` ve `user_agent` sütunları artık doldurulmaktadır. V1'deki gap kapatıldı.
+
+### Zincir
+
+```
+Telefon / Tarayıcı
+   │
+   ▼ (gerçek IP)
+nginx → X-Real-IP: $remote_addr
+   │
+   ▼
+YonetimApi (PersonnelEndpoints.cs)
+  ExtractHeaders() → X-Real-IP veya X-Forwarded-For headers
+  BuildResolveRequestAsync / FileBelongsToPersonnelAsync
+  → tüm FileService HTTP isteklerine X-Client-IP header'ı eklenir
+   │
+   ▼
+FileServiceApi (FileEndpoints.cs)
+  Her method başında:
+    clientIp  = request.Headers["X-Client-IP"].FirstOrDefault()
+    userAgent = request.Headers["User-Agent"].FirstOrDefault()
+  Tüm audit.WriteAsync çağrıları clientIp + userAgent parametreleriyle güncellendi
+   │
+   ▼
+AuditService.WriteAsync(... actorIp, userAgent)
+  → files.audit_events.actor_ip + user_agent INSERT
+```
+
+### Değiştirilen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `nginx/nginx.conf` | `/api/auth/` location'a `X-Real-IP $remote_addr` eklendi (zaten mevcuttu diğer location'larda) |
+| `YonetimApi/Endpoints/PersonnelEndpoints.cs` | `ExtractHeaders()` 3-tuple döndürür: `(actor, correlationId, clientIp)`. Tüm FileService HTTP mesajlarına `X-Client-IP` header'ı eklendi |
+| `FileServiceApi/Services/AuditService.cs` | `WriteAsync` imzası `actorIp` ve `userAgent` optional parametresi aldı |
+| `FileServiceApi/Endpoints/FileEndpoints.cs` | Tüm 6 handler (Resolve, GetMetadata, GetContent, Create, List, Archive) başında `clientIp`/`userAgent` extraction eklendi; tüm `WriteAsync` çağrıları güncellendi |
+
+### Doğrulama
+
+Rebuild + telefondan farklı IP ile dosya yüklendikten sonra:
+```sql
+SELECT actor, actor_ip, user_agent, action, result, created_at
+FROM files.audit_events
+ORDER BY created_at DESC
+LIMIT 5;
+```
+`actor_ip` sütununda telefonun gerçek IP adresi görülmeli.
+
 ## SIRADAKİ ADIM
 
+- **Container rebuild ve test**: `docker compose up --build -d` → telefondan dosya yükle → audit tablosunda `actor_ip` kontrol et.
 - **V2 Download Ticket**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
 - **Sertifika rotasyonu**: Prod'da cert süresi dolmadan yenileme prosedürü (sıfır kesinti için rolling restart).
 - **Frontend production packaging**: Client için Nginx/static hosting imajı ve compose servisi eklenecekse ayrı teslim kalemi olarak yapılmalı.

@@ -12,7 +12,7 @@ public class AuditService
         _db = db;
     }
 
-    public async Task WriteAsync(Guid? fileId, string? appCode, string? actor, string action, string result, string? reasonCode, string? correlationId)
+    public async Task WriteAsync(Guid? fileId, string? appCode, string? actor, string action, string result, string? reasonCode, string? correlationId, string? actorIp = null, string? userAgent = null)
     {
         _db.AuditEvents.Add(new AuditEvent
         {
@@ -23,6 +23,8 @@ public class AuditService
             Result = result,
             ReasonCode = reasonCode,
             CorrelationId = correlationId,
+            ActorIp = actorIp,
+            UserAgent = userAgent,
             CreatedAt = DateTime.UtcNow
         });
         await _db.SaveChangesAsync();
