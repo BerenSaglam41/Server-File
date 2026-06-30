@@ -53,17 +53,15 @@ dosya-sistemi-projesi/
   │     ├── fileservice.crt/key        <- FileServiceApi server cert (CN=fileservice)
   │     ├── yonetimapi.crt/key         <- YonetimApi client cert
   │     └── filoapi.crt/key            <- FlotaApi client cert
-  ├── docker-compose.yml               <- 6 servis: postgres, keycloak, fileservice, yonetimapi, flotaapi, gateway
+  ├── docker-compose.yml               <- 6 servis: postgres, keycloak, fileservice, yonetimapi, flotaapi, gateway(nginx)
   ├── docker-compose.override.yml      <- Dev-only port mapping (5205, 5076, 5077)
+  ├── nginx/
+  │     └── nginx.conf                 <- Gateway routing: /api/personnel→yonetimapi, /api/vehicles→flotaapi
   ├── runbooks/
   │     ├── files01-nfs-setup.md               <- NFS kurulum runbook (üretim adımları)
   │     └── files01-nfs-kurulum-notlari.md     <- UTM VM kurulum oturumu notları
   ├── tools/
   │     └── migrate-legacy-files.py    <- Legacy dosya migration aracı
-  ├── Gateway/                         <- YARP reverse proxy, port 5090 (Gateway-01)
-  │     ├── Dockerfile
-  │     ├── Program.cs
-  │     └── appsettings.json
   ├── FileServiceApi/                  <- .NET minimal API, mTLS HTTPS:8080 (iç ağ)
   │     ├── Dockerfile
   │     ├── Models/
@@ -602,13 +600,13 @@ Production'da minimum yapılması gerekenler:
 1. Keycloak admin konsolunu (`/admin`) dış erişime kapat (firewall veya Keycloak `hostname-admin` config)
 2. Keycloak 8080'i yalnız yerel ağa sınırla (UTM subnet için uygundur)
 
-Gateway üzerinden Keycloak routing teknik olarak mümkündür (YARP route `/realms/**` → `keycloak:8080`) ama JWT `iss` claim'i ve MetadataAddress eşleşmesi için ek config gerekir — V1 kapsam dışı bırakıldı.
+Gateway üzerinden Keycloak routing teknik olarak mümkündür (nginx `location /realms/` → `keycloak:8080`) ama JWT `iss` claim'i ve MetadataAddress eşleşmesi için ek config gerekir — V1 kapsam dışı bırakıldı.
 
 ## Docker Konteynerizasyonu (TAMAMLANDI ✅)
 
-Tüm sistem docker compose ile çalışıyor: `postgres`, `keycloak`, `fileservice`, `yonetimapi`, `gateway`.
+Tüm sistem docker compose ile çalışıyor: `postgres`, `keycloak`, `fileservice`, `yonetimapi`, `flotaapi`, `gateway`.
 
-**Dockerfile'lar:** `FileServiceApi/Dockerfile`, `YonetimApi/Dockerfile`, `Gateway/Dockerfile` — .NET 10, multi-stage build.
+**Dockerfile'lar:** `FileServiceApi/Dockerfile`, `YonetimApi/Dockerfile`, `FlotaApi/Dockerfile` — .NET 10, multi-stage build. Gateway artık `nginx:alpine` imajını kullanır; Dockerfile yoktur.
 
 **Veritabanı init:** `db/docker-init/01-schema.sql` (tüm şema), `db/docker-init/02-seed.sql` (app_policies seed).
 
@@ -1044,8 +1042,7 @@ FileId bazlı indirme/arşivleme akışında personel bağlamı doğrulandı. `Y
 ### Kapsam Dışı
 
 - Fleet/Flota UI yok; `FlotaApi` backend consumer olarak mevcut.
-- Refresh token akışı yok; access token süresi dolunca yeniden login gerekir.
-- Production frontend hosting/Nginx imajı henüz eklenmedi; client şu an Vite dev/build çıktısı olarak hazır.
+- Production frontend hosting imajı henüz eklenmedi; client şu an Vite dev/build çıktısı olarak hazır (gateway nginx'i ile karıştırılmamalı — gateway nginx:alpine ayrı servis).
 
 ## Client UI — Son Düzeltmeler (2026-06-30)
 

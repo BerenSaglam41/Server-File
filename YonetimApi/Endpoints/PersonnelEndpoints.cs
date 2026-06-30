@@ -196,8 +196,7 @@ public static class PersonnelEndpoints
             httpContext.Response.Headers["Content-Range"] = crValues.ToArray();
         if (contentResp.Headers.TryGetValues("ETag", out var etagValues))
             httpContext.Response.Headers["ETag"] = etagValues.ToArray();
-        if (contentResp.Headers.TryGetValues("Accept-Ranges", out var arValues))
-            httpContext.Response.Headers["Accept-Ranges"] = arValues.ToArray();
+        httpContext.Response.Headers["Accept-Ranges"] = "bytes";
 
         await contentResp.Content.CopyToAsync(httpContext.Response.Body);
     }
@@ -457,6 +456,9 @@ public static class PersonnelEndpoints
             httpContext.Response.Headers["Content-Disposition"] = cd.ToArray();
         if (resp.Headers.TryGetValues("ETag", out var etag))
             httpContext.Response.Headers["ETag"] = etag.ToArray();
+        if (resp.Content.Headers.TryGetValues("Content-Range", out var cr))
+            httpContext.Response.Headers["Content-Range"] = cr.ToArray();
+        httpContext.Response.Headers["Accept-Ranges"] = "bytes";
 
         await resp.Content.CopyToAsync(httpContext.Response.Body);
     }

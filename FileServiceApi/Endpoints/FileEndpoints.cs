@@ -242,7 +242,8 @@ public static class FileEndpoints
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
         }
 
-        response.Headers["ETag"] = etag;
+        response.Headers["ETag"]          = etag;
+        response.Headers["Accept-Ranges"] = "bytes";
 
         var imageExtensions = new[] { "jpg", "jpeg", "png", "webp" };
         if (imageExtensions.Contains(fileObject.Extension))
