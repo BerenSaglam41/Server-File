@@ -1736,6 +1736,7 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
   sonra Prometheus/Grafana/tracing kurulmalı.
 - **Deploy/test otomasyonu**: `tools/server-smoke-test.sh` eklendi. Sonraki iyileştirme olarak branch
   deploy helper (`git fetch && checkout && setup-server && smoke`) tek komuta indirilebilir.
+- **Infrastructure Console (Ops Dashboard)**: Kullanıcı/platform ayrımı olan admin arayüzü. Bölümler: System Health, Services, Storage, Backups, Restore, Audit, Monitoring, **Alerts** (disk/.backup/.restore status burada görünür), Logs, Users, Settings. Ön koşul: observability (structured logs + request ID) ve ops API endpoint'leri tamamlanmalı. Mevcut `.disk-status`, `.backup-status`, `.restore-status` dosyaları bu console'un veri kaynağı olacak.
 - **Strict NFS ro/publisher modeli**: Minimum production için şart değil; V2 hardening olarak tutuluyor.
   Bu modele geçilirse FileService runtime NFS'e yazmaz, staging/publish ayrı kontrollü sürece taşınır.
 - **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
