@@ -74,7 +74,8 @@ echo "[OK] fileservice, yonetimapi, flotaapi durduruldu"
 # 2. Storage restore
 echo "[..] Storage restore ediliyor..."
 echo "     $BACKUP_DIR/export/ → $STORAGE_ROOT/export/"
-rsync -a --delete "$BACKUP_DIR/export/" "$STORAGE_ROOT/export/"
+# --no-o --no-g: NFS all_squash ortamında chown yapılamaz, atla
+rsync -rl --delete --no-o --no-g "$BACKUP_DIR/export/" "$STORAGE_ROOT/export/"
 echo "[OK] Storage restore tamamlandı"
 
 # 3. PostgreSQL restore
