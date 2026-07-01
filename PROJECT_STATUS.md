@@ -1465,8 +1465,8 @@ UTM/test kolaylığı gerekiyorsa bilinçli olarak `NFS_MODE=test bash setup-ser
 2. Production modda Files-01'in `/srv/files *` olarak açık olmadığını kontrol eder
 3. NFS mount yoksa `192.168.64.3:/srv/files → /mnt/platform-files` mount eder + `/etc/fstab`'a ekler
 4. `certs/*.key` dosyaları eksikse/klasörse `generate-certs.sh` çalıştırır
-5. `docker compose up --build -d`
-6. `docker compose restart fileservice` (NFS mount sırası için)
+5. Production modda `docker compose -f docker-compose.yml up --build -d`; test modda normal `docker compose up --build -d`
+6. `docker compose ... restart fileservice` (NFS mount sırası için)
 7. DB tablolar yoksa `01-schema.sql` + `02-seed.sql` çalıştırır
 
 ### Linux Sunucusu İlk Kurulum
@@ -1483,7 +1483,7 @@ git pull
 bash setup-server.sh
 
 # Ya da sadece container rebuild:
-docker compose up --build -d
+docker compose -f docker-compose.yml up --build -d
 ```
 
 ### Bilinen Kısıtlar

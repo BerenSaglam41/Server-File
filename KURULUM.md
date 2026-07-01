@@ -194,7 +194,7 @@ Bu script otomatik olarak şunları yapar:
 - `NFS_MODE=production` ise Files-01'in `/srv/files *` olarak açık olmadığını kontrol eder
 - files-01'i `/mnt/platform-files`'a mount eder + `/etc/fstab`'a ekler
 - `.key` sertifika dosyaları eksikse `generate-certs.sh` çalıştırır
-- `docker compose up --build -d`
+- Production modda `docker compose -f docker-compose.yml up --build -d`
 - `fileservice` container'ını yeniden başlatır (NFS timing)
 - DB schema ve seed SQL'lerini çalıştırır (tablolar yoksa)
 

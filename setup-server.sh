@@ -23,6 +23,15 @@ MOUNT_POINT="${MOUNT_POINT:-/mnt/platform-files}"
 NFS_EXPORT="${NFS_EXPORT:-/srv/files}"
 NFS_MOUNT_OPTIONS="${NFS_MOUNT_OPTIONS:-defaults,_netdev,nfsvers=4.2,proto=tcp}"
 NFS_MODE="${NFS_MODE:-production}" # production | test
+COMPOSE_ARGS="${COMPOSE_ARGS:-}"
+
+if [ -z "$COMPOSE_ARGS" ]; then
+    if [ "$NFS_MODE" = "production" ]; then
+        COMPOSE_ARGS="-f docker-compose.yml"
+    else
+        COMPOSE_ARGS=""
+    fi
+fi
 
 if [ "$NFS_MODE" = "production" ]; then
     if ! command -v showmount >/dev/null 2>&1; then
@@ -82,17 +91,17 @@ echo "[OK] Sertifikalar hazır"
 
 # 4. Docker container'ları kaldır
 echo "[..] Docker container'ları rebuild ediliyor..."
-docker compose up --build -d
+docker compose $COMPOSE_ARGS up --build -d
 echo "[OK] Container'lar ayakta"
 
 # 5. Fileservice NFS bağlantısını uygula (NFS container başladıktan sonra mount edildiyse)
 echo "[..] Fileservice yeniden başlatılıyor (NFS storage aktif)..."
-docker compose restart fileservice
+docker compose $COMPOSE_ARGS restart fileservice
 echo "[OK] Fileservice NFS ile çalışıyor"
 
 # 6. DB schema + seed (tablolar yoksa)
 echo "[..] Veritabanı schema kontrol ediliyor..."
-PG=$(docker compose ps -q postgres)
+PG=$(docker compose $COMPOSE_ARGS ps -q postgres)
 TABLE_COUNT=$(docker exec "$PG" psql -U platform -d platformdb -tAc \
     "SELECT COUNT(*) FROM pg_tables WHERE schemaname='yonetim';" 2>/dev/null || echo "0")
 if [ "$TABLE_COUNT" = "0" ]; then
