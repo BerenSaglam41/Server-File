@@ -287,6 +287,12 @@ bash setup-server.sh
 bash tools/server-smoke-test.sh
 ```
 
+Ek güvenli test paketi:
+
+```bash
+bash tools/server-safe-test-suite.sh
+```
+
 `tools/server-smoke-test.sh` şu kısa kontrolleri yapar:
 
 - Gateway health
@@ -298,6 +304,14 @@ bash tools/server-smoke-test.sh
 - `opsadmin` login
 - `/ops/me`, `/ops/health`, `/ops/services`, `/ops/disk`, `/ops/backups`, `/ops/version`, `/ops/dashboard`
 - `files.audit_events` son kayıtlarını gösterme
+
+`tools/server-safe-test-suite.sh` sistemi bozmadan daha derin kontroller yapar:
+
+- `/ops/dashboard` JSON alan bütünlüğü
+- `X-Correlation-Id` response header
+- en büyük mevcut personel dosyasını indirip boyut doğrulama
+- 20 eşzamanlı login
+- son ops audit kayıtlarının yazıldığını doğrulama
 
 Varsayılanlar:
 
