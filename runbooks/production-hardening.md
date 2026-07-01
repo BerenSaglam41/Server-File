@@ -238,6 +238,7 @@ Canlı doğrulama sırası API/FileService sunucusunda çalıştırılır:
 cd ~/Server-File
 git pull
 bash setup-server.sh
+bash tools/server-smoke-test.sh
 
 docker compose ps
 mount | grep platform-files
@@ -319,39 +320,73 @@ Production kabulü için backup tek seferlik komut olarak kalmamalıdır. Hedef:
 - Backup çıktısı Files-01 üstünde tek kopya olarak kalmamalı; ayrı disk, ayrı VM veya object storage'a kopyalanmalıdır.
 - Her çalıştırma sonunda log ve exit code izlenmelidir. Başarısız backup production alarmı sayılır.
 
-Basit systemd timer örneği:
+### 4.1 Systemd timer kurulumu (2026-07-01 tamamlandı)
 
-```ini
-# /etc/systemd/system/platform-files-backup.service
-[Unit]
-Description=Platform Files-01 backup
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/dosya-sistemi-projesi
-Environment=STORAGE_ROOT=/mnt/platform-files
-Environment=BACKUP_ROOT=/backup/platform-files
-ExecStart=/opt/dosya-sistemi-projesi/tools/backup-files01.sh
-```
-
-```ini
-# /etc/systemd/system/platform-files-backup.timer
-[Unit]
-Description=Daily Platform Files-01 backup
-
-[Timer]
-OnCalendar=*-*-* 03:00:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
+API sunucusunda tek komutla kurulur:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now platform-files-backup.timer
-systemctl list-timers platform-files-backup.timer
+cd ~/dosya-sistemi-projesi   # repo'nun API sunucusundaki yolu
+sudo bash tools/install-backup-timers.sh
 ```
+
+Script şu işlemleri yapar:
+- `platform-backup.service` + `platform-backup.timer` → her gün 02:00 UTC
+- `platform-restore-test.service` + `platform-restore-test.timer` → her Pazar 03:00 UTC
+- Eski backup temizleme: `BACKUP_RETAIN=14` (son 14 backup tutulur)
+- `systemctl enable --now` ile timer'lar hemen devreye girer
+
+Env override örnekleri:
+
+```bash
+# Farklı repo yolu veya zamanlama
+sudo PROJECT_DIR=/opt/platform \
+     BACKUP_TIME="*-*-* 01:00:00 UTC" \
+     bash tools/install-backup-timers.sh
+
+# Daha az backup saklama (disk kısıtlı ortam)
+sudo BACKUP_RETAIN=7 bash tools/install-backup-timers.sh
+```
+
+### 4.2 Doğrulama
+
+Timer listesi ve sonraki çalışma zamanları:
+
+```bash
+systemctl list-timers 'platform-*'
+```
+
+Manuel test çalıştırması (timer'ı beklemeden):
+
+```bash
+sudo systemctl start platform-backup.service
+journalctl -u platform-backup --no-pager -n 50
+
+sudo systemctl start platform-restore-test.service
+journalctl -u platform-restore-test --no-pager -n 50
+```
+
+Backup içeriğini doğrula:
+
+```bash
+ls -lh /backup/platform-files/
+ls -lh /backup/platform-files/*/platformdb.dump
+ls -lh /backup/platform-files/*/export.sha256
+cat /backup/platform-files/*/backup-info.txt
+```
+
+Canlı log izleme:
+
+```bash
+journalctl -u platform-backup -f
+journalctl -u platform-restore-test -f
+```
+
+### 4.3 Kabuller
+
+- `platform-backup.service` başarısız çıkış kodu döndürürse `journalctl` ve `systemctl status platform-backup` ile teşhis yapılır.
+- Restore testi canlı `export/` alanına yazmaz; yalnız `restore-tests/<timestamp>/export` altında hash doğrulaması yapar.
+- Backup çıktısı tek kopya kalmamalıdır. `rsync` veya `rclone` ile ayrı VM, disk veya object storage'a kopyalanması önerilir.
+- `SKIP_DB_DUMP=1` yalnız storage testi için kullanılır; production timer'larında bulunmamalıdır.
 
 ## 5. Sertifika Üretimi ve Rotasyon
 
@@ -476,6 +511,7 @@ Production'a geçmeden önce şu kapılar tamamlanır:
 | Env config | Compose config production değerleriyle çalışıyor |
 | Storage health | `.probe` okunuyor |
 | Write path | Upload 200, archive 200, DB rollback testi temiz |
+| Deploy smoke | `bash tools/server-smoke-test.sh` gateway/login/list/download/403/audit kontrollerini geçiyor |
 | Backup | Otomasyon export/manifests/db dump üretir ve sonucu izlenir |
 | Restore test | Periyodik restore testi restore-tests altında hash doğrular |
 | Denial test | API dışı host NFS mount/2049 erişimi alamıyor |

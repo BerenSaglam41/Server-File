@@ -206,6 +206,8 @@ Bu script otomatik olarak şunları yapar:
 docker compose ps
 curl -k https://localhost:5090/health
 # {"status":"healthy","service":"Gateway-Nginx"}
+
+bash tools/server-smoke-test.sh
 ```
 
 Dışarıdan: `https://192.168.64.5:5090` (self-signed) veya `https://domain:5090` (Let's Encrypt)
@@ -216,7 +218,101 @@ Dışarıdan: `https://192.168.64.5:5090` (self-signed) veya `https://domain:509
 cd ~/Server-File
 git pull
 bash setup-server.sh
+bash tools/server-smoke-test.sh
 ```
+
+### Backup Timer Kurulumu
+
+İlk kurulumdan sonra bir kere çalıştır (root gerektirir):
+
+```bash
+sudo mkdir -p /backup/platform-files
+sudo bash tools/install-backup-timers.sh
+```
+
+Timer'ları doğrula:
+
+```bash
+systemctl list-timers 'platform-*'
+# platform-backup.timer       → her gün 02:00 UTC
+# platform-restore-test.timer → her Pazar 03:00 UTC
+```
+
+Manuel test (timer'ı beklemeden):
+
+```bash
+sudo systemctl start platform-backup.service
+journalctl -u platform-backup --no-pager -n 30
+
+sudo systemctl start platform-restore-test.service
+journalctl -u platform-restore-test --no-pager -n 20
+```
+
+---
+
+## 3.1 Geliştirme ve Deploy Akışı
+
+Günlük geliştirme Mac'te yapılır; Files-01 production minimum güvenlik modelinde Mac'e açılmaz.
+FileAPI sunucusu integration/prod-like doğrulama ortamıdır.
+
+```text
+Mac = development
+FileAPI (192.168.64.5) = integration/prod-like test
+Files-01 (192.168.64.3) = storage-only; yalnız FileAPI erişir
+```
+
+### Mac'te geliştirme
+
+```bash
+git pull
+# kod değişikliği
+npm --prefix client run build
+dotnet build FileServiceApi/FileServiceApi.csproj
+dotnet build YonetimApi/YonetimApi.csproj
+git push
+```
+
+Mac'te NFS allowlist açılmaz. Mac yalnız tarayıcı/geliştirici makinesidir.
+
+### FileAPI sunucusunda doğrulama
+
+```bash
+cd ~/Server-File
+git pull
+bash setup-server.sh
+bash tools/server-smoke-test.sh
+```
+
+`tools/server-smoke-test.sh` şu kısa kontrolleri yapar:
+
+- Gateway health
+- `hr001` login
+- personel listesi
+- `P001` dosya listesi
+- varsa ilk dosyayı download
+- `p001` kullanıcısının başka personele erişemediğini `403` ile doğrulama
+- `files.audit_events` son kayıtlarını gösterme
+
+Varsayılanlar:
+
+```bash
+BASE_URL=https://localhost:5090
+HR_USER=hr001
+HR_PASS=Demo1234!
+SELF_USER=p001
+SELF_PASS=Demo1234!
+PERSONNEL_ID=P001
+OTHER_PERSONNEL_ID=P002
+```
+
+Farklı değerlerle çalıştırmak için:
+
+```bash
+BASE_URL=https://192.168.64.5:5090 PERSONNEL_ID=ADM001 bash tools/server-smoke-test.sh
+```
+
+Smoke test sistemi değiştirmemek için otomatik dosya yüklemez. `P001` dosya listesi boşsa download
+kontrolünü uyarı vererek atlar.
 
 ---
 
@@ -349,7 +445,7 @@ Production'a geçmeden önce şu kapılar tamamlanmalı:
 - API sunucusunda `setup-server.sh` gerçek upload yolunu doğrulamalı:
   `staging/personnel/...` yazma → SHA256 okuma → `export/personnel/...` içine taşıma.
 - `staging` geçici, `export` kalıcı/backup kapsamı olarak ayrılmalı.
-- Backup/restore canlıda test edildi; production için systemd timer + alarm ile düzenli hale getirilmeli.
+- Backup/restore systemd timer ile otomatik: `sudo bash tools/install-backup-timers.sh` (bkz. aşağıdaki Backup Timer bölümü).
 - `certs/generate-certs.sh` kazara CA yenilemeyecek şekilde kullanılmalı; CA rotasyonu planlı yapılmalı.
 - `appsettings.json` dosyalarındaki local değerlerin fallback olduğu bilinmeli; production config `docker compose config` ve container env çıktısıyla doğrulanmalı.
 

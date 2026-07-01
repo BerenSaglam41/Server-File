@@ -67,14 +67,14 @@ hardening olarak tut.**
 |---|---|---|---|
 | Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı; FileService container staging→export probe geçti |
 | Secret rotasyonu | Demo secret'lar compose/realm içinde duruyor | **Canlıya çıkmadan önce zorunlu** | Prod deploy gerçek secret'ları env/secret store'dan alıyor; demo kullanıcı/parola prod realm'de yok |
-| Backup/restore otomasyonu | **Canlı backup + restore testi geçti (2026-07-01)** | **Otomasyon/timer kaldı** | `/backup/platform-files/20260701T071527Z` backup oluştu; `platformdb.dump` alındı; restore hash doğrulaması `OK` döndü |
+| Backup/restore otomasyonu | **Systemd timer kuruldu (2026-07-01)** | **Kapandı** | `platform-backup.timer` (günlük 02:00 UTC) + `platform-restore-test.timer` (haftalık Pazar 03:00 UTC) API sunucusunda aktif; `tools/install-backup-timers.sh` ile kurulur; 14 backup retention; canlı test `[OK]` döndü |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
 | NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | FileService runtime NFS'e yazamıyor; publisher/ops süreci atomik publish yapıyor; upload akışı buna göre değişmiş |
 | Observability | Log + audit + health var; metrics/tracing/dashboard yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id tüm katmanlarda izleniyor; `/metrics`, Prometheus ve Grafana devreye alınmış |
 
 Önerilen sıra:
 
-1. Backup/restore otomasyonunu systemd timer'a bağlamak.
+1. ~~Backup/restore otomasyonunu systemd timer'a bağlamak.~~ **Tamamlandı (2026-07-01)**
 2. Secret rotasyonu ve prod env ayrımı.
 3. Gerçek domain + Let's Encrypt + public 443.
 4. Observability Faz 1: request id + structured logs + correlation standardı.
@@ -219,7 +219,10 @@ dosya-sistemi-projesi/
   │     ├── production-hardening.md            <- Production hardening, NFS allowlist, backup/restore
   │     └── observability-plan.md              <- Request id, metrics, tracing, dashboard planı
   ├── tools/
-  │     └── migrate-legacy-files.py    <- Legacy dosya migration aracı
+  │     ├── migrate-legacy-files.py    <- Legacy dosya migration aracı
+  │     ├── backup-files01.sh          <- Files-01 export + PostgreSQL dump backup
+  │     ├── restore-test.sh            <- Backup hash doğrulama / restore probe
+  │     └── server-smoke-test.sh       <- Deploy sonrası gateway/login/list/download/403/audit smoke test
   ├── FileServiceApi/                  <- .NET minimal API, mTLS HTTPS:8080 (iç ağ)
   │     ├── Dockerfile
   │     ├── Models/
@@ -259,6 +262,7 @@ dosya-sistemi-projesi/
 ```bash
 git pull
 bash setup-server.sh
+bash tools/server-smoke-test.sh
 ```
 Tarayıcı: `http://192.168.64.5:5090/`
 
@@ -1428,6 +1432,18 @@ Not: Bu bölüm geliştirme/test kolaylığını anlatır. Güncel minimum produ
 NFS ile mount etmez; Mac yalnız tarayıcı olarak Gateway'e gider. Files-01 NFS export'u yalnız
 API/FileService sunucusuna açıktır.
 
+Güncel çalışma modeli:
+
+```text
+Mac = development
+FileAPI sunucusu = integration/prod-like doğrulama
+Files-01 = storage-only, yalnız FileAPI erişir
+```
+
+Karar: Mac'i Files-01 allowlist'e eklemiyoruz. Aksi halde production minimum güvenlik modeli gevşer ve
+container/NFS izin hataları geliştirici makinesinde gizlenebilir. Kod Mac'te geliştirilir, gerçek
+Gateway/mTLS/NFS doğrulaması FileAPI sunucusunda yapılır.
+
 ### Topoloji
 
 ```
@@ -1548,6 +1564,16 @@ UTM/test kolaylığı gerekiyorsa bilinçli olarak `NFS_MODE=test bash setup-ser
 5. Production modda `docker compose -f docker-compose.yml up --build -d`; test modda normal `docker compose up --build -d`
 6. `docker compose ... restart fileservice` (NFS mount sırası için)
 7. DB tablolar yoksa `01-schema.sql` + `02-seed.sql` çalıştırır
+8. FileService container içinden gerçek `staging -> export` probe'u çalıştırır
+
+Deploy sonrası önerilen doğrulama:
+
+```bash
+bash tools/server-smoke-test.sh
+```
+
+Smoke test kapsamı: Gateway health, login, personel listesi, `P001` files, varsa download, `p001`
+başkasına `403`, audit son kayıtlar.
 
 ### Linux Sunucusu İlk Kurulum
 
@@ -1561,6 +1587,7 @@ bash setup-server.sh
 # Kod güncellemesi:
 git pull
 bash setup-server.sh
+bash tools/server-smoke-test.sh
 
 # Ya da sadece container rebuild:
 docker compose -f docker-compose.yml up --build -d
@@ -1669,6 +1696,8 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
   443 ve güvenilir sertifika zinciri tamamlanmalı.
 - **Observability Faz 1**: Request id/correlation standardı, structured logs ve temel metrics eklenmeli;
   sonra Prometheus/Grafana/tracing kurulmalı.
+- **Deploy/test otomasyonu**: `tools/server-smoke-test.sh` eklendi. Sonraki iyileştirme olarak branch
+  deploy helper (`git fetch && checkout && setup-server && smoke`) tek komuta indirilebilir.
 - **API hata sözlüğü tutarlılığı**: FileService tarafında bazı durumlar teknik olarak `result=denied`
   audit edilirken YonetimApi/client upload cevabında `error` alanı daha genel kalabiliyor. Production
   polish için FileService `reason_code` değerleri (`data_scope_denied`, `policy_denied`,

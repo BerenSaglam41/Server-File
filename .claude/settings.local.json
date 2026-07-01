@@ -20,7 +20,8 @@
       "Bash(docker info *)",
       "Bash(awk '{print $2}')",
       "Bash(pkill -f \"YonetimApi\")",
-      "Bash(PGPASSWORD=\"\" psql *)"
+      "Bash(PGPASSWORD=\"\" psql *)",
+      "Bash(sshpass *)"
     ]
   }
 }
