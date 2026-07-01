@@ -301,6 +301,14 @@ public static class OpsEndpoints
         var retentionUsedPct = BackupRetain > 0
             ? (int)Math.Floor(dirs.Count * 100.0 / BackupRetain)
             : 0;
+        var latestBackup = dirs.FirstOrDefault()?.date;
+        var statusBackupDir = statusFields.GetValueOrDefault("backup_dir");
+        var statusBackupName = string.IsNullOrWhiteSpace(statusBackupDir)
+            ? null
+            : Path.GetFileName(statusBackupDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var latestStatus = latestBackup is not null && latestBackup == statusBackupName
+            ? statusFields.GetValueOrDefault("status")
+            : latestBackup is not null ? "unknown" : statusFields.GetValueOrDefault("status");
 
         return new
         {
@@ -308,8 +316,8 @@ public static class OpsEndpoints
             total_size_mb = totalSizeMb,
             retention_limit = BackupRetain,
             retention_used_pct = retentionUsedPct,
-            last_backup   = statusFields.GetValueOrDefault("timestamp"),
-            last_status   = statusFields.GetValueOrDefault("status"),
+            last_backup   = latestBackup ?? statusFields.GetValueOrDefault("timestamp"),
+            last_status   = latestStatus,
             backups       = dirs,
         };
     }

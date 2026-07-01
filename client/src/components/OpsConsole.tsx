@@ -382,7 +382,7 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
               {backups.data?.last_backup && (
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                   <Dot state={backups.data.last_status === 'success' ? 'healthy' : 'unhealthy'} />
-                  Son: {formatDate(backups.data.last_backup)}
+                  Son yedek: {formatDate(backups.data.last_backup)}
                 </div>
               )}
             </div>
