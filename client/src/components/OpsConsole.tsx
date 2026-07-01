@@ -318,6 +318,12 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
               )}
             </div>
             {services.err ? <ErrText msg={services.err} /> : services.data ? (
+              services.data.services.length === 0 ? (
+                <div className="text-xs text-yellow-300 bg-yellow-500/10 border border-yellow-600/30 rounded-lg px-3 py-2">
+                  Servis snapshot boş. API sunucusunda <span className="font-mono">bash tools/services-status.sh</span> çalıştırıp
+                  <span className="font-mono"> /backup/platform-files/.services-status.json</span> dosyasını kontrol et.
+                </div>
+              ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
@@ -356,6 +362,7 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
                   </tbody>
                 </table>
               </div>
+              )
             ) : <Loading />}
           </Card>
 

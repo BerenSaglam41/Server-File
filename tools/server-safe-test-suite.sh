@@ -73,6 +73,9 @@ require_command docker
 echo "=== Safe test suite başlıyor ==="
 echo "Base URL: $BASE_URL"
 
+log "Servis status snapshot yenileniyor"
+BACKUP_ROOT="${BACKUP_ROOT:-/backup/platform-files}" COMPOSE_FILE="$COMPOSE_FILE" bash tools/services-status.sh
+
 log "Temel kullanıcılarla login"
 login "$HR_USER" "$HR_PASS" "$HR_COOKIE" "hr"
 login "$OPS_USER" "$OPS_PASS" "$OPS_COOKIE" "ops"

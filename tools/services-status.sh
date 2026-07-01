@@ -23,7 +23,18 @@ raw="$(mktemp)"
 tmp="$(mktemp)"
 trap 'rm -f "$raw" "$tmp"' EXIT
 
-if docker compose -f "$COMPOSE_FILE" ps --format json > "$raw" 2>/tmp/platform-services-status.err; then
+compose_project_name() {
+  docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("name",""))' 2>/dev/null || true
+}
+
+if docker compose -f "$COMPOSE_FILE" ps -a --format json > "$raw" 2>/tmp/platform-services-status.err; then
+  if [ ! -s "$raw" ] || [ "$(tr -d '[:space:]' < "$raw")" = "[]" ]; then
+    project="$(compose_project_name)"
+    if [ -n "$project" ]; then
+      docker ps -a --filter "label=com.docker.compose.project=$project" --format '{{json .}}' > "$raw" 2>/tmp/platform-services-status.err || true
+    fi
+  fi
   python3 - "$raw" "$tmp" "$STAMP" <<'PY'
 import datetime as dt
 import json
