@@ -250,6 +250,34 @@ Kabul:
 - Hash doğrulama `OK` döner.
 - `SKIP_DB_DUMP=1` production doğrulamada kullanılmaz.
 
+### 2026-07-01 canlı backup/restore sonucu
+
+API/FileService sunucusunda gerçek PostgreSQL dump ve Files-01 export backup'ı alındı:
+
+```text
+Backup target:
+/backup/platform-files/20260701T071527Z
+
+Backup sonucu:
+[OK] Backup completed: /backup/platform-files/20260701T071527Z
+
+DB dump:
+/backup/platform-files/20260701T071527Z/platformdb.dump
+```
+
+Restore testi canlı `export/` alanına yazmadan restore-tests altında çalıştı:
+
+```text
+Restore target:
+/mnt/platform-files/restore-tests/20260701T071530Z
+
+Restore sonucu:
+[OK] Restore test completed: /mnt/platform-files/restore-tests/20260701T071530Z
+```
+
+`export.sha256` manifestindeki fleet/personnel dosyaları ve `.probe` için hash doğrulama `OK` döndü.
+Sonraki adım bu komutları systemd timer ve log/alert takibine bağlamaktır.
+
 Restore testi canlı `export/` alanına geri yazmaz; yedeği `restore-tests/<timestamp>/export` altına açar ve `export.sha256` manifestini doğrular.
 
 Kuru storage testi veya CI benzeri DB'siz kontrolde `SKIP_DB_DUMP=1` kullanılabilir. Production backup'ta kullanılmamalıdır:

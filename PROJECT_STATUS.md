@@ -67,15 +67,15 @@ hardening olarak tut.**
 |---|---|---|---|
 | Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı |
 | Secret rotasyonu | Demo secret'lar compose/realm içinde duruyor | **Canlıya çıkmadan önce zorunlu** | Prod deploy gerçek secret'ları env/secret store'dan alıyor; demo kullanıcı/parola prod realm'de yok |
-| Backup/restore otomasyonu | Scriptler var; dry restore testi yapıldı | **Canlıya çıkmadan önce otomasyona alınmalı** | Günlük backup timer çalışıyor; haftalık restore testi hash doğruluyor; sonuçlar log/alert'e bağlı |
+| Backup/restore otomasyonu | **Canlı backup + restore testi geçti (2026-07-01)** | **Otomasyon/timer kaldı** | `/backup/platform-files/20260701T071527Z` backup oluştu; `platformdb.dump` alındı; restore hash doğrulaması `OK` döndü |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
 | NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | FileService runtime NFS'e yazamıyor; publisher/ops süreci atomik publish yapıyor; upload akışı buna göre değişmiş |
 | Observability | Log + audit + health var; metrics/tracing/dashboard yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id tüm katmanlarda izleniyor; `/metrics`, Prometheus ve Grafana devreye alınmış |
 
 Önerilen sıra:
 
-1. Secret rotasyonu ve prod env ayrımı.
-2. Backup/restore otomasyonu.
+1. Backup/restore otomasyonunu systemd timer'a bağlamak.
+2. Secret rotasyonu ve prod env ayrımı.
 3. Gerçek domain + Let's Encrypt + public 443.
 4. Observability Faz 1: request id + structured logs + correlation standardı.
 5. Metrics + Prometheus + Grafana.
@@ -119,6 +119,36 @@ nc -vz -G 3 192.168.64.3 2049 -> Operation timed out
 
 Sonuç: Files-01 artık ağdaki herkese açık NFS storage değildir; yalnız API/FileService sunucusu mount
 edebilir. Client/Mac/başka VM dosya katmanını bypass edemez.
+
+### 2026-07-01 canlı backup/restore doğrulaması
+
+API/FileService sunucusunda gerçek storage ve PostgreSQL dump ile backup alındı, ardından canlı `export/`
+alanına dokunmadan restore testi çalıştırıldı.
+
+Kanıtlar:
+
+```text
+Backup:
+STORAGE_ROOT=/mnt/platform-files BACKUP_ROOT=/backup/platform-files ./tools/backup-files01.sh
+[OK] Backup completed: /backup/platform-files/20260701T071527Z
+
+Backup içeriği:
+export/
+manifests/
+export.sha256
+platformdb.dump
+backup-info.txt
+
+Restore:
+STORAGE_ROOT=/mnt/platform-files BACKUP_ROOT=/backup/platform-files ./tools/restore-test.sh
+[OK] Restore test completed: /mnt/platform-files/restore-tests/20260701T071530Z
+
+Hash doğrulama:
+fleet/personnel altındaki tüm dosyalar ve .probe için OK döndü.
+```
+
+Sonuç: Export dosyaları, manifestler ve PostgreSQL catalog dump alınabiliyor; restore testi hash
+doğrulamasını geçiyor. Kalan iş bunu günlük/haftalık systemd timer + alarm yapısına bağlamak.
 
 ## Test ortamı
 

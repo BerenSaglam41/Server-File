@@ -79,14 +79,47 @@ if [ ! -f "$MOUNT_POINT/export/.probe" ]; then
 fi
 echo "[OK] Storage erişilebilir (probe dosyası var)"
 
-# 3. mTLS sertifikaları — .key dosyaları gitignore'da; yoksa veya klasörse üret
-for KEY in certs/fileservice.key certs/yonetimapi.key certs/filoapi.key; do
-    if [ ! -f "$KEY" ]; then
-        echo "[..] Sertifikalar eksik/bozuk, yeniden üretiliyor..."
-        bash certs/generate-certs.sh
-        break
+# 3. mTLS/Gateway sertifikaları — .key dosyaları gitignore'da; yoksa veya eşleşmiyorsa üret
+CERTS_NEED_REGEN=0
+CERT_BACKUP_DIR="certs/backup-mismatch-$(date +%Y%m%d%H%M%S)"
+
+backup_cert_pair() {
+    local name="$1"
+    mkdir -p "$CERT_BACKUP_DIR"
+    [ -e "certs/$name.crt" ] && mv "certs/$name.crt" "$CERT_BACKUP_DIR/$name.crt" || true
+    [ -e "certs/$name.key" ] && mv "certs/$name.key" "$CERT_BACKUP_DIR/$name.key" || true
+    echo "[..] certs/$name.crt/key yedeğe alındı: $CERT_BACKUP_DIR"
+}
+
+cert_key_match() {
+    local name="$1"
+    local cert="certs/$name.crt"
+    local key="certs/$name.key"
+
+    [ -f "$cert" ] && [ -f "$key" ] || return 1
+
+    local cert_mod key_mod
+    cert_mod="$(openssl x509 -noout -modulus -in "$cert" 2>/dev/null | openssl sha256 2>/dev/null || true)"
+    key_mod="$(openssl rsa -noout -modulus -in "$key" 2>/dev/null | openssl sha256 2>/dev/null || true)"
+
+    [ -n "$cert_mod" ] && [ "$cert_mod" = "$key_mod" ]
+}
+
+for CERT_NAME in fileservice gateway yonetimapi filoapi; do
+    if [ ! -f "certs/$CERT_NAME.crt" ] || [ ! -f "certs/$CERT_NAME.key" ]; then
+        echo "[..] certs/$CERT_NAME.crt/key eksik, sertifika üretimi gerekli"
+        CERTS_NEED_REGEN=1
+    elif ! cert_key_match "$CERT_NAME"; then
+        echo "[UYARI] certs/$CERT_NAME.crt ve certs/$CERT_NAME.key eşleşmiyor"
+        backup_cert_pair "$CERT_NAME"
+        CERTS_NEED_REGEN=1
     fi
 done
+
+if [ "$CERTS_NEED_REGEN" = "1" ]; then
+    echo "[..] Sertifikalar eksik/bozuk, yeniden üretiliyor..."
+    bash certs/generate-certs.sh
+fi
 echo "[OK] Sertifikalar hazır"
 
 # 4. Docker container'ları kaldır
