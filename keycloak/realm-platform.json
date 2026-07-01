@@ -862,7 +862,11 @@
     {
       "username": "opsadmin",
       "enabled": true,
+      "firstName": "Ops",
+      "lastName": "Admin",
       "email": "opsadmin@platform.internal",
+      "emailVerified": true,
+      "requiredActions": [],
       "credentials": [
         {
           "type": "password",
@@ -882,6 +886,7 @@
       "lastName": "User",
       "email": "opsuser01@platform.internal",
       "emailVerified": true,
+      "requiredActions": [],
       "credentials": [
         {
           "type": "password",
@@ -891,6 +896,28 @@
       ],
       "realmRoles": [
         "ops.read"
+      ]
+    },
+    {
+      "username": "fleetuser",
+      "enabled": true,
+      "firstName": "Fleet",
+      "lastName": "User",
+      "email": "fleetuser@demo.local",
+      "emailVerified": true,
+      "requiredActions": [],
+      "realmRoles": [],
+      "attributes": {
+        "vehicle_id": [
+          "test_arac_1"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
       ]
     }
   ]

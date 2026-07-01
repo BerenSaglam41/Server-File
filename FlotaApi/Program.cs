@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Npgsql;
 using System.Security.Cryptography.X509Certificates;
 using FlotaApi.Endpoints;
+using FlotaApi.Infrastructure;
 using FlotaApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -56,10 +57,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.MetadataAddress = builder.Configuration["Keycloak:MetadataAddress"]
             ?? $"{authority}/.well-known/openid-configuration";
         options.RequireHttpsMetadata = builder.Configuration.GetValue<bool>("Keycloak:RequireHttpsMetadata");
+        options.MapInboundClaims = false;
+        options.BackchannelHttpHandler = new KeycloakBackchannelHandler();
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateAudience = false,
-            ValidIssuers = new[] { authority },
+            ValidIssuers = new[] { authority, "http://keycloak:8080/realms/platform" },
+        };
+        // BFF: token önce "at" cookie'sinden okunur; curl testleri için header da desteklenir.
+        options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+        {
+            OnMessageReceived = ctx =>
+            {
+                if (string.IsNullOrEmpty(ctx.Token))
+                    ctx.Token = ctx.Request.Cookies["at"];
+                return Task.CompletedTask;
+            }
         };
     });
 

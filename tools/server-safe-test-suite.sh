@@ -20,12 +20,29 @@ PERSONNEL_ID="${PERSONNEL_ID:-P001}"
 CONCURRENT_LOGINS="${CONCURRENT_LOGINS:-20}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 
+# Yetkisiz erişim (403) matrisi için ek demo kullanıcılar
+MANAGER_USER="${MANAGER_USER:-m001}"
+MANAGER_PASS="${MANAGER_PASS:-Demo1234!}"
+MANAGER_OWN_TEAM_ID="${MANAGER_OWN_TEAM_ID:-P001}"       # m001'in ekibinde
+MANAGER_OTHER_TEAM_ID="${MANAGER_OTHER_TEAM_ID:-P008}"   # m002'nin ekibinde, m001'in değil
+SELF_USER="${SELF_USER:-p001}"
+SELF_PASS="${SELF_PASS:-Demo1234!}"
+SELF_PERSONNEL_ID="${SELF_PERSONNEL_ID:-P001}"
+OTHER_PERSONNEL_ID="${OTHER_PERSONNEL_ID:-P002}"
+FLEET_USER="${FLEET_USER:-fleetuser}"
+FLEET_PASS="${FLEET_PASS:-Demo1234!}"
+FLEET_OWN_VEHICLE="${FLEET_OWN_VEHICLE:-test_arac_1}"
+FLEET_OTHER_VEHICLE="${FLEET_OTHER_VEHICLE:-test_arac_2}"
+
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 HR_COOKIE="$WORK_DIR/hr.cookies"
 OPS_COOKIE="$WORK_DIR/ops.cookies"
 OPS_READ_COOKIE="$WORK_DIR/ops-read.cookies"
+MANAGER_COOKIE="$WORK_DIR/manager.cookies"
+SELF_COOKIE="$WORK_DIR/self.cookies"
+FLEET_COOKIE="$WORK_DIR/fleet.cookies"
 
 log() { printf '[..] %s\n' "$*"; }
 ok() { printf '[OK] %s\n' "$*"; }
@@ -49,6 +66,20 @@ expect_status() {
     exit 1
   fi
   ok "$label -> HTTP $actual"
+}
+
+expect_reason() {
+  local expected_reason="$1"
+  local body_file="$2"
+  local label="$3"
+  local actual_reason
+  actual_reason="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('reason',''))" "$body_file" 2>/dev/null || true)"
+  if [ "$actual_reason" != "$expected_reason" ]; then
+    printf '\n[HATA] %s beklenen reason=%s gelen reason=%s\n' "$label" "$expected_reason" "$actual_reason" >&2
+    cat "$body_file" >&2 || true
+    exit 1
+  fi
+  ok "$label -> reason=$actual_reason"
 }
 
 login() {
@@ -80,6 +111,9 @@ log "Temel kullanıcılarla login"
 login "$HR_USER" "$HR_PASS" "$HR_COOKIE" "hr"
 login "$OPS_USER" "$OPS_PASS" "$OPS_COOKIE" "ops"
 login "$OPS_READ_USER" "$OPS_READ_PASS" "$OPS_READ_COOKIE" "ops-read"
+login "$MANAGER_USER" "$MANAGER_PASS" "$MANAGER_COOKIE" "manager"
+login "$SELF_USER" "$SELF_PASS" "$SELF_COOKIE" "self"
+login "$FLEET_USER" "$FLEET_PASS" "$FLEET_COOKIE" "fleet"
 
 log "Refresh endpoint kontrolü"
 status="$(curl -k -sS -o "$WORK_DIR/hr-refresh.body" -w '%{http_code}' \
@@ -260,5 +294,91 @@ if [ -n "$postgres_container" ]; then
 else
   printf '[UYARI] docker compose postgres bulunamadı; ops audit DB kontrolü skip edildi.\n'
 fi
+
+log "=== Yetkisiz erişim (403) matrisi başlıyor ==="
+DUMMY_PDF="$WORK_DIR/dummy.pdf"
+printf '%%PDF-1.4\n%%dummy test file, magic-byte kontrolünden geçer\n' > "$DUMMY_PDF"
+
+log "[pozitif] $MANAGER_USER kendi ekibindeki $MANAGER_OWN_TEAM_ID dosyalarını görebiliyor"
+status="$(curl -k -sS -o "$WORK_DIR/m-own-team.body" -w '%{http_code}' \
+  -b "$MANAGER_COOKIE" \
+  "$BASE_URL/api/personnel/$MANAGER_OWN_TEAM_ID/files")"
+expect_status "200" "$status" "$MANAGER_USER -> $MANAGER_OWN_TEAM_ID (kendi ekibi)" "$WORK_DIR/m-own-team.body"
+
+log "[negatif] $MANAGER_USER başka yöneticinin ekibindeki $MANAGER_OTHER_TEAM_ID dosyalarına erişemiyor"
+status="$(curl -k -sS -o "$WORK_DIR/m-other-team.body" -w '%{http_code}' \
+  -b "$MANAGER_COOKIE" \
+  "$BASE_URL/api/personnel/$MANAGER_OTHER_TEAM_ID/files")"
+expect_status "403" "$status" "$MANAGER_USER -> $MANAGER_OTHER_TEAM_ID (başka ekip)" "$WORK_DIR/m-other-team.body"
+expect_reason "access_denied" "$WORK_DIR/m-other-team.body" "$MANAGER_USER -> $MANAGER_OTHER_TEAM_ID reason"
+
+log "[negatif] $MANAGER_USER kendi ekibine bile dosya yükleyemiyor (write rolü yok)"
+status="$(curl -k -sS -o "$WORK_DIR/m-write.body" -w '%{http_code}' \
+  -b "$MANAGER_COOKIE" \
+  -F "file=@$DUMMY_PDF;type=application/pdf" \
+  -X POST "$BASE_URL/api/personnel/$MANAGER_OWN_TEAM_ID/cv")"
+expect_status "403" "$status" "$MANAGER_USER -> $MANAGER_OWN_TEAM_ID cv upload (write rolü yok)" "$WORK_DIR/m-write.body"
+expect_reason "access_denied" "$WORK_DIR/m-write.body" "$MANAGER_USER write reason"
+
+log "[negatif] $SELF_USER başka personelin ($OTHER_PERSONNEL_ID) dosyalarına erişemiyor"
+status="$(curl -k -sS -o "$WORK_DIR/self-other.body" -w '%{http_code}' \
+  -b "$SELF_COOKIE" \
+  "$BASE_URL/api/personnel/$OTHER_PERSONNEL_ID/files")"
+expect_status "403" "$status" "$SELF_USER -> $OTHER_PERSONNEL_ID (başka personel)" "$WORK_DIR/self-other.body"
+expect_reason "access_denied" "$WORK_DIR/self-other.body" "$SELF_USER -> $OTHER_PERSONNEL_ID reason"
+
+log "[negatif] $SELF_USER kendi kaydına bile dosya yükleyemiyor (write.self rolü seed'de yok)"
+status="$(curl -k -sS -o "$WORK_DIR/self-write.body" -w '%{http_code}' \
+  -b "$SELF_COOKIE" \
+  -F "file=@$DUMMY_PDF;type=application/pdf" \
+  -X POST "$BASE_URL/api/personnel/$SELF_PERSONNEL_ID/cv")"
+expect_status "403" "$status" "$SELF_USER -> $SELF_PERSONNEL_ID cv upload (write rolü yok)" "$WORK_DIR/self-write.body"
+expect_reason "access_denied" "$WORK_DIR/self-write.body" "$SELF_USER write reason"
+
+log "fileId-ownership bypass testi: $OTHER_PERSONNEL_ID'nin bir dosyası HR ile bulunuyor"
+status="$(curl -k -sS -o "$WORK_DIR/other-files.body" -w '%{http_code}' \
+  -b "$HR_COOKIE" \
+  "$BASE_URL/api/personnel/$OTHER_PERSONNEL_ID/files")"
+expect_status "200" "$status" "HR -> $OTHER_PERSONNEL_ID files" "$WORK_DIR/other-files.body"
+
+other_file_id="$(python3 -c "
+import json,sys
+files=json.load(open(sys.argv[1]))
+print(files[0]['fileId'] if files else '')
+" "$WORK_DIR/other-files.body")"
+
+if [ -z "$other_file_id" ]; then
+  printf '[UYARI] %s hiç dosyaya sahip değil; fileId-ownership bypass testi skip edildi.\n' "$OTHER_PERSONNEL_ID"
+else
+  log "[negatif] $SELF_USER kendi personelId'si ($SELF_PERSONNEL_ID) üzerinden $OTHER_PERSONNEL_ID'nin fileId'sine ($other_file_id) erişemiyor"
+  status="$(curl -k -sS -o "$WORK_DIR/file-scope-bypass.body" -w '%{http_code}' \
+    -b "$SELF_COOKIE" \
+    "$BASE_URL/api/personnel/$SELF_PERSONNEL_ID/files/$other_file_id/content")"
+  expect_status "403" "$status" "$SELF_USER -> yabancı fileId (path bypass denemesi)" "$WORK_DIR/file-scope-bypass.body"
+  expect_reason "file_scope_denied" "$WORK_DIR/file-scope-bypass.body" "fileId-ownership bypass reason"
+fi
+
+log "[pozitif] $FLEET_USER kendi aracının ($FLEET_OWN_VEHICLE) dosyalarını görebiliyor"
+status="$(curl -k -sS -o "$WORK_DIR/fleet-own.body" -w '%{http_code}' \
+  -b "$FLEET_COOKIE" \
+  "$BASE_URL/api/vehicles/$FLEET_OWN_VEHICLE/files")"
+expect_status "200" "$status" "$FLEET_USER -> $FLEET_OWN_VEHICLE (kendi aracı)" "$WORK_DIR/fleet-own.body"
+
+log "[negatif] $FLEET_USER başka aracın ($FLEET_OTHER_VEHICLE) dosyalarına erişemiyor"
+status="$(curl -k -sS -o "$WORK_DIR/fleet-other.body" -w '%{http_code}' \
+  -b "$FLEET_COOKIE" \
+  "$BASE_URL/api/vehicles/$FLEET_OTHER_VEHICLE/photo")"
+expect_status "403" "$status" "$FLEET_USER -> $FLEET_OTHER_VEHICLE (başka araç)" "$WORK_DIR/fleet-other.body"
+expect_reason "data_scope_denied" "$WORK_DIR/fleet-other.body" "$FLEET_USER -> $FLEET_OTHER_VEHICLE reason"
+
+log "[negatif] $FLEET_USER başka araca dosya yükleyemiyor"
+status="$(curl -k -sS -o "$WORK_DIR/fleet-other-write.body" -w '%{http_code}' \
+  -b "$FLEET_COOKIE" \
+  -F "file=@$DUMMY_PDF;type=application/pdf" \
+  -X POST "$BASE_URL/api/vehicles/$FLEET_OTHER_VEHICLE/document")"
+expect_status "403" "$status" "$FLEET_USER -> $FLEET_OTHER_VEHICLE document upload (başka araç)" "$WORK_DIR/fleet-other-write.body"
+expect_reason "data_scope_denied" "$WORK_DIR/fleet-other-write.body" "$FLEET_USER write reason"
+
+ok "Yetkisiz erişim (403) matrisi tamamlandı — 10 senaryo (pozitif kontroller dahil) doğrulandı"
 
 echo "=== Safe test suite tamamlandı ==="
