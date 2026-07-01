@@ -67,7 +67,7 @@ hardening olarak tut.**
 |---|---|---|---|
 | Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı; FileService container staging→export probe geçti |
 | Secret rotasyonu | Demo secret'lar compose/realm içinde duruyor | **Canlıya çıkmadan önce zorunlu** | Prod deploy gerçek secret'ları env/secret store'dan alıyor; demo kullanıcı/parola prod realm'de yok |
-| Backup/restore otomasyonu | **Systemd timer kuruldu (2026-07-01)** | **Kapandı** | `platform-backup.timer` (günlük 02:00 UTC) + `platform-restore-test.timer` (haftalık Pazar 03:00 UTC) API sunucusunda aktif; `tools/install-backup-timers.sh` ile kurulur; 14 backup retention; canlı test `[OK]` döndü |
+| Backup/restore otomasyonu | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | `platform-backup.timer` (günlük 02:00 UTC) + `platform-restore-test.timer` (haftalık Pazar 03:00 UTC) aktif; `tools/restore-live.sh` ile uçtan uca canlı restore test edildi: File A (backup'ta) → 200, File B (backup sonrası eklendi) → 403/silindi ✅ |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
 | NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | FileService runtime NFS'e yazamıyor; publisher/ops süreci atomik publish yapıyor; upload akışı buna göre değişmiş |
 | Observability | Log + audit + health var; metrics/tracing/dashboard yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id tüm katmanlarda izleniyor; `/metrics`, Prometheus ve Grafana devreye alınmış |
@@ -183,7 +183,44 @@ fleet/personnel altındaki tüm dosyalar ve .probe için OK döndü.
 ```
 
 Sonuç: Export dosyaları, manifestler ve PostgreSQL catalog dump alınabiliyor; restore testi hash
-doğrulamasını geçiyor. Kalan iş bunu günlük/haftalık systemd timer + alarm yapısına bağlamak.
+doğrulamasını geçiyor.
+
+### 2026-07-01 canlı restore (restore-live.sh) uçtan uca doğrulaması
+
+`tools/restore-live.sh` ile belirtilen backup noktasına canlı sistemi geri sarma end-to-end test edildi.
+
+Senaryo:
+- File A (`b58bdb32-...`) → P001'e `attachment` olarak yüklendi
+- Backup alındı: `/backup/platform-files/20260701T085837Z` (47 dosya, File A dahil)
+- File B (`8b936232-...`) → backup'tan sonra yüklendi
+- `FORCE=1 bash tools/restore-live.sh /backup/platform-files/20260701T085837Z` çalıştırıldı
+
+Restore adımları ve sonuçları:
+```text
+[OK] fileservice, yonetimapi, flotaapi durduruldu
+[OK] rsync -rl --delete --no-o --no-g → storage/export restore tamamlandı
+[OK] PostgreSQL restore tamamlandı (pg_restore --clean --if-exists --no-privileges --no-owner)
+[OK] Gateway yeniden başlatıldı (nginx DNS cache temizlendi)
+[OK] Gateway sağlıklı
+```
+
+Doğrulama sonuçları:
+```text
+File A (backup'ta vardı)  : HTTP 200 — beklenen: 200 ✅
+File B (sonra eklendi)    : HTTP 403 — beklenen: erişilemez ✅
+  (403: API güvenlik paterni — dosya files.references'ta sıfır kayıt, 404 yerine 403 döner)
+
+files.objects: yalnız File A var (status=active)
+files.references: File B için 0 kayıt
+Fiziksel storage: File B rsync --delete ile silindi
+```
+
+Tespit edilen ve düzeltilen sorun:
+- `docker compose stop/start` sonrası nginx DNS cache stale kalıyor → `/api/auth/login` ve `/api/personnel/**` 404 dönüyor
+- Fix: restore-live.sh sonuna `docker compose restart gateway` eklendi
+- Commit: `fix(restore-live): gateway restart after service stop/start`
+
+Sonuç: `tools/restore-live.sh` production-ready. NFS all_squash ortamında `rsync --no-o --no-g` + `pg_restore --clean --if-exists` + gateway restart zinciri doğrulandı.
 
 ## Test ortamı
 
@@ -222,6 +259,8 @@ dosya-sistemi-projesi/
   │     ├── migrate-legacy-files.py    <- Legacy dosya migration aracı
   │     ├── backup-files01.sh          <- Files-01 export + PostgreSQL dump backup
   │     ├── restore-test.sh            <- Backup hash doğrulama / restore probe
+  │     ├── restore-live.sh            <- Canlı sistemi belirtilen backup noktasına geri sarar
+  │     ├── install-backup-timers.sh   <- Systemd backup+restore timer'larını kurar (root)
   │     └── server-smoke-test.sh       <- Deploy sonrası gateway/login/list/download/403/audit smoke test
   ├── FileServiceApi/                  <- .NET minimal API, mTLS HTTPS:8080 (iç ağ)
   │     ├── Dockerfile
@@ -1688,8 +1727,6 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
 
 ## SIRADAKİ ADIM
 
-- **Backup/restore otomasyonu**: Tek seferlik canlı backup ve restore testi geçti. Sıradaki iş bunu
-  systemd timer, log retention ve alarm kuralına bağlamak.
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
   store üzerinden yönetilmeli.
 - **Let's Encrypt + gerçek domain**: İç ağ self-signed HTTPS çalışıyor. Public prod için gerçek domain,
