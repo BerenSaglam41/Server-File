@@ -1855,6 +1855,28 @@ durumunda alerts'e critical düşür" gibi bir kendiliğinden kurtulma/alarm mek
 farklı bir hata türü (ör. docker daemon geçici kopması) yine sessizce süresiz "failed" snapshot'ta takılı
 kalabilir. V2 alerting iyileştirmesi olarak değerlendirilebilir.
 
+### Ek doğrulama — Deploy senkronizasyonu ve tekli konteyner resilience testi (2026-07-01)
+
+Fix'in sunucuya ulaşması sırasında ayrı bir sorun daha ortaya çıktı: sunucu 2 commit geride kalmıştı
+(`ee733e3`), `git pull` bu yüzden `tools/services-status.sh` üzerinde "local changes would be overwritten"
+hatası verdi. Sunucudaki dosyanın (daha önce `scp` ile taşınmış hali) yeni commit'le hash bazında birebir
+aynı olduğu doğrulanıp yerel diff temizlendi, pull tamamlandı. Pull ile `OpsEndpoints.cs`, `OpsConsole.tsx`,
+`types.ts` gibi gerçek uygulama kodu değişiklikleri de geldiği için `bash setup-server.sh` çalıştırılıp
+tüm servisler rebuild edildi. `git push origin main` + sunucuda `git pull` + `setup-server.sh` + smoke test
+ile uçtan uca doğrulandı; `/ops/dashboard` `version.commit` alanı push edilen commit'le eşleşti.
+
+Ardından Ops ekranının gerçek zamanlı doğruluğunu kanıtlamak için canlı bir resilience testi yapıldı:
+`client` container'ı bilinçli olarak durduruldu (`docker compose stop client`) → `/ops/services` anında
+`exited` durumunu gösterdi, gateway kök path'i `502` döndü → `docker compose start client` ile geri
+başlatıldı → `/ops/services` `running` durumuna döndü, `restart_count: 0` (Docker'ın kendi restart policy'si
+tetiklenmedi, manuel start/stop olduğu için beklenen davranış), gateway `200`'e döndü, smoke test tekrar
+tam geçti. Bu, Ops Dashboard'un statik/önbelleklenmiş değil gerçek container durumunu yansıttığını kanıtlar.
+
+Ayrıca NFS'in yalnızca api sunucusuna açık olduğu iddiası ağ seviyesinde doğrulandı: files01'de (192.168.64.3)
+`ufw` `default deny incoming` ile aktif, yalnızca `2049/tcp` `192.168.64.5`'ten kabul ediliyor; `rpcbind
+(111)` `0.0.0.0`'da dinliyor ama ufw allow listesinde olmadığı için varsayılan deny ile bloklanıyor. Yani
+koruma hem `/etc/exports` ACL seviyesinde hem firewall seviyesinde çift katmanlı ve gerçek.
+
 ---
 
 ## SIRADAKİ ADIM
