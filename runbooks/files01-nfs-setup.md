@@ -65,12 +65,17 @@ Production minimum profili:
 
 ```bash
 API_SERVER_IP="<API_SERVER_IP>"
-echo "/srv/files  ${API_SERVER_IP}(rw,sync,no_subtree_check,root_squash)" | sudo tee /etc/exports
-sudo exportfs -ra
-sudo ufw allow OpenSSH
-sudo ufw allow from "$API_SERVER_IP" to any port 2049 proto tcp
-sudo ufw enable
+sudo NFS_MODE=production API_SERVER_IP="$API_SERVER_IP" ./tools/configure-files01-nfs.sh
 ```
+
+Script `files-writer:files-publishers` kimliğini oluşturur ve production export'u şu modele çeker:
+
+```exports
+/srv/files <API_SERVER_IP>(rw,sync,no_subtree_check,all_squash,anonuid=<FILES_WRITER_UID>,anongid=<FILES_WRITER_GID>)
+```
+
+Elle `root_squash` kullanmak container içindeki FileService upload akışında `503 storage_unavailable`
+üretebilir; production minimum için script kullanılmalıdır.
 
 Katı production modelinde export runtime için read-only olacak şekilde ayrı tasarlanır; detaylar `runbooks/production-hardening.md` içindedir.
 

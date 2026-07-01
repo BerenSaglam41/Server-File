@@ -165,6 +165,15 @@ echo "[..] Fileservice yeniden başlatılıyor (NFS storage aktif)..."
 docker compose $COMPOSE_ARGS restart fileservice
 echo "[OK] Fileservice NFS ile çalışıyor"
 
+echo "[..] Fileservice container storage yazma testi yapılıyor..."
+if ! docker compose $COMPOSE_ARGS exec -T fileservice sh -lc 'tmp=/app/storage/staging/.setup-write-test && echo ok > "$tmp" && rm -f "$tmp"'; then
+    echo "[HATA] FileService container /app/storage/staging alanına yazamıyor."
+    echo "Files-01 production minimum için setup-files01.sh tekrar çalıştırılmalı:"
+    echo "  sudo NFS_MODE=production API_SERVER_IP=<API_SUNUCUSU_IP> bash setup-files01.sh"
+    exit 1
+fi
+echo "[OK] Fileservice container storage yazabiliyor"
+
 # 6. DB schema + seed (tablolar yoksa)
 echo "[..] Veritabanı schema kontrol ediliyor..."
 PG=$(docker compose $COMPOSE_ARGS ps -q postgres)

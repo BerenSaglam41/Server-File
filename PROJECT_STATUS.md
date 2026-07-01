@@ -120,6 +120,30 @@ nc -vz -G 3 192.168.64.3 2049 -> Operation timed out
 Sonuç: Files-01 artık ağdaki herkese açık NFS storage değildir; yalnız API/FileService sunucusu mount
 edebilir. Client/Mac/başka VM dosya katmanını bypass edemez.
 
+### 2026-07-01 upload 503 kök nedeni ve düzeltme
+
+NFS allowlist sonrası upload sırasında `POST /api/personnel/{id}/cv -> 503` görüldü. Loglarda YonetimApi'nin
+FileService'e ulaştığı, FileService'in `storage_unavailable` döndüğü görüldü. Host üzerinde
+`touch /mnt/platform-files/staging/write-test` başarılı olsa da bu yeterli değil; FileService container'ı
+root olarak NFS'e yazarken `root_squash` nedeniyle Files-01 tarafında anonymous kullanıcıya map ediliyor.
+Bu durumda staging/export yazma izni yoksa upload 503 verir.
+
+Düzeltme: `tools/configure-files01-nfs.sh` production minimum modeli `root_squash` yerine
+`all_squash + files-writer` modeline çevrildi. Script `files-writer:files-publishers` kimliğini oluşturur,
+storage dizin sahipliğini ayarlar ve export'u şu modele yazar:
+
+```exports
+/srv/files <API_SERVER_IP>(rw,sync,no_subtree_check,all_squash,anonuid=<FILES_WRITER_UID>,anongid=<FILES_WRITER_GID>)
+```
+
+`setup-server.sh` içine FileService container yazma probe'u eklendi:
+
+```bash
+docker compose ... exec -T fileservice sh -lc 'tmp=/app/storage/staging/.setup-write-test && echo ok > "$tmp" && rm -f "$tmp"'
+```
+
+Artık API hosttan yazma değil, container içinden staging yazma da setup sırasında doğrulanır.
+
 ### 2026-07-01 canlı backup/restore doğrulaması
 
 API/FileService sunucusunda gerçek storage ve PostgreSQL dump ile backup alındı, ardından canlı `export/`

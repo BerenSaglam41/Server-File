@@ -36,11 +36,16 @@ Bu profil production için uygun değildir. Sadece kapalı test ağı ve geçici
 
 ### Production minimum profil
 
-Mevcut FileService upload akışı staging'e yazıp export'a `File.Move` yaptığı için API sunucusunun NFS üzerinde yazma yetkisi gerekir. Bu yüzden minimum production profili geniş `*` yerine yalnız API sunucusu IP'sini allowlist eder:
+Mevcut FileService upload akışı staging'e yazıp export'a `File.Move` yaptığı için API sunucusunun NFS üzerinde yazma yetkisi gerekir. Bu yüzden minimum production profili geniş `*` yerine yalnız API sunucusu IP'sini allowlist eder. Container root'un NFS tarafında kontrolsüz root gibi davranmaması ve upload akışının çalışması için tüm NFS işlemleri Files-01 üzerinde `files-writer` kullanıcısına map edilir:
 
 ```exports
-/srv/files <API_SERVER_IP>(rw,sync,no_subtree_check,root_squash)
+/srv/files <API_SERVER_IP>(rw,sync,no_subtree_check,all_squash,anonuid=<FILES_WRITER_UID>,anongid=<FILES_WRITER_GID>)
 ```
+
+`tools/configure-files01-nfs.sh` production modunda `files-writer:files-publishers` kimliğini oluşturur,
+`export/`, `staging/`, `manifests/`, `restore-tests/` sahipliğini bu kimliğe verir ve export satırını
+otomatik yazar. Elle `root_squash` kullanmak container içinden upload sırasında `503 storage_unavailable`
+üretebilir; çünkü container root kullanıcısı NFS tarafında anonymous kullanıcıya düşer.
 
 Firewall sadece API sunucusundan TCP/2049 kabul etmelidir:
 
@@ -102,6 +107,10 @@ ufw:
 Default: deny (incoming)
 2049/tcp ALLOW IN 192.168.64.5
 ```
+
+Not: İlk canlı doğrulamada `root_squash` kullanıldı. Upload 503 verince minimum-prod model scriptte
+`all_squash + files-writer` modeline güncellendi; Files-01 üzerinde `setup-files01.sh` tekrar
+çalıştırıldığında export satırı yeni modele döner.
 
 API sunucusu doğrulaması:
 

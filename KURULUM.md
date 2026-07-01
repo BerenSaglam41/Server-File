@@ -45,17 +45,17 @@ Production minimum örnek:
 
 ```bash
 API_SERVER_IP="<API_SERVER_IP>"
-echo "/srv/files  ${API_SERVER_IP}(rw,sync,no_subtree_check,root_squash)" | sudo tee /etc/exports
-sudo exportfs -ra
-sudo ufw allow OpenSSH
-sudo ufw allow from "$API_SERVER_IP" to any port 2049 proto tcp
-sudo ufw enable
+sudo NFS_MODE=production API_SERVER_IP="$API_SERVER_IP" ./tools/configure-files01-nfs.sh
 ```
 
-Repo scriptiyle aynı ayarı yapmak:
+Bu script `files-writer:files-publishers` kimliğini oluşturur, storage dizin sahipliğini ayarlar ve
+NFS export'u yalnız API sunucusuna açar. Elle `root_squash` export yazmak container upload akışında
+`503 storage_unavailable` hatasına yol açabilir.
 
-```bash
-sudo NFS_MODE=production API_SERVER_IP=192.168.64.5 ./tools/configure-files01-nfs.sh
+Scriptin yazdığı export modeli:
+
+```exports
+/srv/files <API_SERVER_IP>(rw,sync,no_subtree_check,all_squash,anonuid=<FILES_WRITER_UID>,anongid=<FILES_WRITER_GID>)
 ```
 
 ### Doğrula
