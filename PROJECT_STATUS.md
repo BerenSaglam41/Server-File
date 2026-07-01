@@ -70,6 +70,7 @@ hardening olarak tut.**
 | Backup/restore otomasyonu | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | `platform-backup.timer` (günlük 02:00 UTC) + `platform-restore-test.timer` (haftalık Pazar 03:00 UTC) aktif; `tools/restore-live.sh` ile uçtan uca canlı restore test edildi: File A (backup'ta) → 200, File B (backup sonrası eklendi) → 403/silindi ✅ |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
 | NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | FileService runtime NFS'e yazamıyor; publisher/ops süreci atomik publish yapıyor; upload akışı buna göre değişmiş |
+| Disk kapasitesi izleme | **Tamamlandı (2026-07-01)** | **Kapandı** | `platform-disk-check.timer` saatlik çalışır; WARN=%80, CRIT=%90; `.disk-status` yazar; `setup-server.sh` raporlar; Docker build cache temizliği ile API sunucusu %77→%57'ye düşürüldü |
 | Observability | Log + audit + health var; metrics/tracing/dashboard yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id tüm katmanlarda izleniyor; `/metrics`, Prometheus ve Grafana devreye alınmış |
 
 Önerilen sıra:
