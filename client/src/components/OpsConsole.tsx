@@ -84,6 +84,13 @@ function formatDuration(seconds: number | null | undefined) {
   return `${Math.max(1, mins)} dk`
 }
 
+function serviceAgeSeconds(startedAt: string | null | undefined, fallback: number | null | undefined) {
+  if (!startedAt) return fallback
+  const started = new Date(startedAt).getTime()
+  if (Number.isNaN(started)) return fallback
+  return Math.max(0, Math.floor((Date.now() - started) / 1000))
+}
+
 export default function OpsConsole({ auth, onBack, onLogout }: Props) {
   const [health,   setHealth]   = useState<Slot<OpsHealth>>  ({ data: null, err: null })
   const [services, setServices] = useState<Slot<OpsServices>>({ data: null, err: null })
@@ -314,7 +321,7 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
             <div className="flex items-center justify-between gap-3 mb-3">
               <Label>Konteynerler {services.data ? `(${services.data.count})` : ''}</Label>
               {services.data?.timestamp && (
-                <span className="text-[11px] text-gray-500">Snapshot: {formatDate(services.data.timestamp)}</span>
+                <span className="text-[11px] text-gray-500">Ölçüm: {formatDate(services.data.timestamp)}</span>
               )}
             </div>
             {services.err ? <ErrText msg={services.err} /> : services.data ? (
@@ -356,7 +363,9 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
                         <td className="py-2 pr-4 text-right text-gray-500">{s.cpu || '—'}</td>
                         <td className="py-2 pr-4 text-right text-gray-500">{s.memory || '—'}</td>
                         <td className="py-2 pr-4 text-right text-gray-500">{s.restart_count ?? '—'}</td>
-                        <td className="py-2 text-right text-gray-500">{formatDuration(s.age_seconds)}</td>
+                        <td className="py-2 text-right text-gray-500">
+                          {formatDuration(serviceAgeSeconds(s.started_at, s.age_seconds))}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
