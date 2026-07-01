@@ -137,7 +137,14 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
   useEffect(() => {
     refresh()
     const id = setInterval(refresh, 30_000)
-    return () => clearInterval(id)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [refresh])
 
   return (
