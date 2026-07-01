@@ -12,6 +12,18 @@ Files-01 public servis değildir. Client, YonetimApi ve FlotaApi Files-01'e doğ
 
 ## 1. NFS Export ve Firewall
 
+Neden: Files-01 storage-only bileşendir ve istemciye public servis sunmaz. NFS export
+`/srv/files *` olarak kaldığında aynı ağdaki herhangi bir makine FileService, Gateway,
+auth ve audit katmanlarını bypass ederek Files-01'i mount edebilir. Bu durum hedef mimariyi bozar:
+
+```text
+Client -> Gateway -> Uygulama API -> FileServiceApi -> Files-01
+```
+
+Minimum production hedefi, strict read-only publisher modeline geçmeden önce bu bypass yolunu
+kapatmaktır. Upload/download/archive kodu değişmeden çalışmaya devam eder; yalnız NFS'e erişebilen
+host listesi daraltılır.
+
 ### Test / UTM profili
 
 UTM ve lokal testte pratiklik için tüm `/srv/files` dizini rw export edilebilir:
@@ -38,13 +50,41 @@ sudo ufw allow from <API_SERVER_IP> to any port 2049 proto tcp
 sudo ufw enable
 ```
 
+Repo içindeki yardımcı script Files-01 üzerinde aynı ayarı uygular:
+
+```bash
+sudo NFS_MODE=production API_SERVER_IP=192.168.64.5 ./tools/configure-files01-nfs.sh
+```
+
+UTM/test kolaylığı bilinçli olarak korunacaksa:
+
+```bash
+sudo NFS_MODE=test ./tools/configure-files01-nfs.sh
+```
+
+Kural: `NFS_MODE=production` iken `/etc/exports` içinde `/srv/files *` kesinlikle yazılmamalıdır.
+
 Doğrulama:
 
 ```bash
+cat /etc/exports
 sudo exportfs -v
 showmount -e localhost
-nc -vz <FILES_01_IP> 2049       # API sunucusundan başarılı olmalı
-nc -vz <FILES_01_IP> 2049       # başka hosttan başarısız olmalı
+```
+
+API sunucusunda:
+
+```bash
+mount | grep platform-files
+nc -vz <FILES_01_IP> 2049       # başarılı olmalı
+```
+
+Mac veya izinsiz makinede:
+
+```bash
+sudo mkdir -p /tmp/files01-test
+sudo mount -t nfs -o resvport <FILES_01_IP>:/srv/files /tmp/files01-test
+# Beklenen: access denied veya timeout
 ```
 
 ## 2. Katı Production Modeli
@@ -150,6 +190,47 @@ Kuru storage testi veya CI benzeri DB'siz kontrolde `SKIP_DB_DUMP=1` kullanılab
 STORAGE_ROOT=/tmp/fake-storage BACKUP_ROOT=/tmp/fake-backup SKIP_DB_DUMP=1 tools/backup-files01.sh
 ```
 
+Production kabulü için backup tek seferlik komut olarak kalmamalıdır. Hedef:
+
+- Günlük backup: `export/`, `manifests/`, `platformdb.dump`.
+- Haftalık restore testi: canlı `export/` alanına yazmadan `restore-tests/` altında hash doğrulama.
+- Backup çıktısı Files-01 üstünde tek kopya olarak kalmamalı; ayrı disk, ayrı VM veya object storage'a kopyalanmalıdır.
+- Her çalıştırma sonunda log ve exit code izlenmelidir. Başarısız backup production alarmı sayılır.
+
+Basit systemd timer örneği:
+
+```ini
+# /etc/systemd/system/platform-files-backup.service
+[Unit]
+Description=Platform Files-01 backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dosya-sistemi-projesi
+Environment=STORAGE_ROOT=/mnt/platform-files
+Environment=BACKUP_ROOT=/backup/platform-files
+ExecStart=/opt/dosya-sistemi-projesi/tools/backup-files01.sh
+```
+
+```ini
+# /etc/systemd/system/platform-files-backup.timer
+[Unit]
+Description=Daily Platform Files-01 backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now platform-files-backup.timer
+systemctl list-timers platform-files-backup.timer
+```
+
 ## 5. Sertifika Üretimi ve Rotasyon
 
 `certs/generate-certs.sh` artık mevcut CA ve sertifikaları varsayılan olarak ezmez. Eksik dosyaları üretir, bilinçli yenileme için `FORCE_REGENERATE_CERTS=1` gerekir.
@@ -173,7 +254,67 @@ Mevcut CA'yı yenilemek production'da tüm servislerin aynı güven zincirini de
 
 VPS/public domain için Gateway'de Let's Encrypt tercih edilir; iç servis mTLS CA'sı public TLS'ten ayrı tutulur.
 
-## 6. Appsettings / Environment Sınırı
+## 6. Gateway Public TLS / Let's Encrypt
+
+Development ve UTM ortamında gateway'in host portu `5090` olabilir. Gerçek public production'da hedef
+normal kullanıcı URL'sinin portsuz çalışmasıdır:
+
+```text
+https://platform.example.com
+```
+
+Bunun için production compose veya reverse proxy katmanı gateway'i public `443` üzerinden yayınlamalıdır:
+
+```yaml
+gateway:
+  ports:
+    - "443:443"
+    # HTTP-01 challenge veya redirect kullanılacaksa:
+    - "80:80"
+```
+
+Let's Encrypt için iki kabul edilebilir model vardır:
+
+1. `certbot --standalone`: sertifika yenileme sırasında 80 portu geçici olarak certbot'a verilir, sonra gateway restart edilir.
+2. Reverse proxy / webroot modeli: 80/443 dış reverse proxy'de kalır, gateway iç ağa HTTPS veya HTTP ile bağlanır.
+
+Mevcut repo self-signed gateway sertifikasıyla iç ağ/dev için çalışır. Public production'a çıkarken
+`certs/gateway.crt` ve `certs/gateway.key` Let's Encrypt fullchain/privkey kopyalarıyla beslenmeli veya
+gateway'in önüne ayrı TLS termination konmalıdır.
+
+Doğrulama:
+
+```bash
+curl https://platform.example.com/health
+openssl s_client -connect platform.example.com:443 -servername platform.example.com </dev/null
+```
+
+## 7. Secret Rotasyonu
+
+Demo/test ortamındaki değerler production secret kabul edilmez:
+
+- Keycloak client secret'ları: `yonetimapi-secret-v1`, `filoapi-secret`.
+- PostgreSQL parolası: `platformpass`.
+- Demo kullanıcı parolaları: `Demo1234!`.
+- İç mTLS private key'leri ve CA key'i.
+
+Production hedefi:
+
+- `docker-compose.yml` demo default olarak kalabilir; production deploy ayrı `.env.prod` veya secret manager ile yapılır.
+- Compose içinde gerçek secret literal yazılmaz; `${YONETIMAPI_CLIENT_SECRET}`, `${FILOAPI_CLIENT_SECRET}`, `${POSTGRES_PASSWORD}` gibi env değişkenleri kullanılır.
+- Keycloak production realm import'u demo realm'den ayrılır veya deploy sonrası admin/API ile secret'lar rotate edilir.
+- Demo kullanıcılar production realm'de bulunmaz; gerekiyorsa sadece kapalı UAT ortamında tutulur.
+- CA/private key dosyaları repo dışında saklanır; dosya izinleri owner-only olmalıdır.
+
+Önerilen rotasyon sırası:
+
+1. Yeni Keycloak client secret üret.
+2. Production env/secret store'u güncelle.
+3. İlgili uygulama container'ını rolling restart et.
+4. Eski secret'la token alınamadığını doğrula.
+5. Audit/loglarda başarısız auth artışı olmadığını kontrol et.
+
+## 8. Appsettings / Environment Sınırı
 
 `appsettings.json` dosyalarındaki `localhost`, Mac path ve local connection string değerleri local fallback kabul edilir.
 
@@ -199,7 +340,7 @@ docker compose exec yonetimapi printenv | grep -E 'FileService|Keycloak|Connecti
 
 Kural: production'da container içindeki aktif config `localhost` veya `/Volumes/...` göstermemelidir. İstisna: Keycloak issuer bilerek `localhost:8080` olarak sabitlenmiş dev/test senaryosu.
 
-## 7. Kabul Kapıları
+## 9. Kabul Kapıları
 
 Production'a geçmeden önce şu kapılar tamamlanır:
 
@@ -207,11 +348,12 @@ Production'a geçmeden önce şu kapılar tamamlanır:
 |---|---|
 | NFS export | `*` yok, yalnız API sunucusu IP allowlist |
 | Firewall | TCP/2049 yalnız API sunucusuna açık |
-| Gateway | Public'te gerçek TLS veya doğru SAN'lı internal cert |
+| Gateway | Public production'da gerçek domain + 443 + Let's Encrypt veya dış TLS termination |
 | İç mTLS | CA korunmuş, servis sertifikaları doğrulanıyor |
+| Secrets | Demo secret/parola yok; production env/secret store kullanılıyor |
 | Env config | Compose config production değerleriyle çalışıyor |
 | Storage health | `.probe` okunuyor |
 | Write path | Upload 200, archive 200, DB rollback testi temiz |
-| Backup | `tools/backup-files01.sh` export/manifests/db dump üretir |
-| Restore test | `tools/restore-test.sh` restore-tests altında hash doğrular |
+| Backup | Otomasyon export/manifests/db dump üretir ve sonucu izlenir |
+| Restore test | Periyodik restore testi restore-tests altında hash doğrular |
 | Denial test | API dışı host NFS mount/2049 erişimi alamıyor |

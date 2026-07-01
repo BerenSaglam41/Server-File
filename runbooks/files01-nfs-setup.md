@@ -1,7 +1,8 @@
 # files-01 NFS Kurulum Runbook
 
 files-01 (192.168.64.3), tüm sisteme dosya depolama sağlayan NFS sunucusudur.
-Hem Mac hem API sunucusu (192.168.64.5) bu sunucuya bağlanır.
+Test/UTM modunda Mac ve API sunucusu bu sunucuya bağlanabilir. Production minimum modunda
+yalnız API/FileService sunucusu (varsayılan: 192.168.64.5) mount edebilir.
 
 > Bu runbook UTM/test kurulumunu anlatır. Production için geniş `*` export kullanılmaz;
 > production-hardening adımları için `runbooks/production-hardening.md` dosyasını izle.
@@ -22,6 +23,7 @@ sudo apt install -y nfs-kernel-server
 sudo mkdir -p /srv/files/export/personnel
 sudo mkdir -p /srv/files/export/fleet
 sudo mkdir -p /srv/files/staging/personnel
+sudo mkdir -p /srv/files/staging/fleet
 sudo mkdir -p /srv/files/manifests/personnel
 sudo mkdir -p /srv/files/restore-tests/personnel
 
@@ -41,7 +43,17 @@ echo "probe" | sudo tee /srv/files/export/.probe > /dev/null
 
 ### 4. NFS export
 
-UTM/test profili:
+Bu repo Files-01 üzerinde çalıştırılabilecek yardımcı script içerir:
+
+```bash
+# Production minimum: yalnız API/FileService sunucusu mount edebilir
+sudo NFS_MODE=production API_SERVER_IP=192.168.64.5 ./tools/configure-files01-nfs.sh
+
+# UTM/test: eski kolaylık, ağdaki makineler mount edebilir
+sudo NFS_MODE=test ./tools/configure-files01-nfs.sh
+```
+
+Script kullanmadan elle yapmak gerekirse UTM/test profili:
 
 ```bash
 echo "/srv/files  *(rw,sync,no_subtree_check)" | sudo tee /etc/exports
@@ -55,7 +67,9 @@ Production minimum profili:
 API_SERVER_IP="<API_SERVER_IP>"
 echo "/srv/files  ${API_SERVER_IP}(rw,sync,no_subtree_check,root_squash)" | sudo tee /etc/exports
 sudo exportfs -ra
+sudo ufw allow OpenSSH
 sudo ufw allow from "$API_SERVER_IP" to any port 2049 proto tcp
+sudo ufw enable
 ```
 
 Katı production modelinde export runtime için read-only olacak şekilde ayrı tasarlanır; detaylar `runbooks/production-hardening.md` içindedir.
@@ -63,6 +77,12 @@ Katı production modelinde export runtime için read-only olacak şekilde ayrı 
 ### 5. Doğrula
 
 ```bash
+# Files-01 üzerinde — önce/sonra gerçek export satırını gör
+cat /etc/exports
+
+# Files-01 üzerinde — aktif NFS exportlarını gör
+sudo exportfs -v
+
 showmount -e localhost
 # UTM/test beklenen:
 # Export list for localhost:
@@ -70,6 +90,22 @@ showmount -e localhost
 #
 # Production beklenen:
 # /srv/files  <API_SERVER_IP>
+```
+
+API sunucusunda:
+
+```bash
+mount | grep platform-files
+nc -vz <FILES_01_IP> 2049
+# Beklenen: succeeded/open
+```
+
+Mac veya izinsiz başka makinede:
+
+```bash
+sudo mkdir -p /tmp/files01-test
+sudo mount -t nfs -o resvport <FILES_01_IP>:/srv/files /tmp/files01-test
+# Production beklenen: access denied veya timeout
 ```
 
 ---
@@ -98,6 +134,9 @@ showmount -e localhost
 |---|---|---|
 | Mac | `/Volumes/platform-files` | `sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files` |
 | API sunucusu (192.168.64.5) | `/mnt/platform-files` | `sudo mount -t nfs 192.168.64.3:/srv/files /mnt/platform-files` |
+
+Production minimum modunda Mac satırı geçerli değildir; Mac/başka VM mount edememelidir. Production'da
+dosyalara yalnız Gateway → Uygulama API → FileService akışıyla erişilir.
 
 ---
 

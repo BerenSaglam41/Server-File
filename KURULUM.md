@@ -13,7 +13,8 @@ Sistemde iki ayrı sunucu var:
 
 ## 1. files-01 Kurulumu
 
-files-01, hem Mac hem API sunucusunun bağlandığı NFS depolama sunucusudur.  
+files-01, NFS depolama sunucusudur. Test/UTM profilinde Mac ve API sunucusu bağlanabilir.
+Production minimum profilinde yalnız API/FileService sunucusu bağlanmalıdır.
 Sıfırdan kurulumu için bkz. `runbooks/files01-nfs-setup.md`
 
 > Aşağıdaki özet UTM/test profilidir. Production'da `*` ile NFS export açma; yalnız API sunucusu IP'sini allowlist et ve TCP/2049'u firewall ile sınırla. Ayrıntı: `runbooks/production-hardening.md`.
@@ -45,15 +46,39 @@ Production minimum örnek:
 API_SERVER_IP="<API_SERVER_IP>"
 echo "/srv/files  ${API_SERVER_IP}(rw,sync,no_subtree_check,root_squash)" | sudo tee /etc/exports
 sudo exportfs -ra
+sudo ufw allow OpenSSH
 sudo ufw allow from "$API_SERVER_IP" to any port 2049 proto tcp
+sudo ufw enable
+```
+
+Repo scriptiyle aynı ayarı yapmak:
+
+```bash
+sudo NFS_MODE=production API_SERVER_IP=192.168.64.5 ./tools/configure-files01-nfs.sh
 ```
 
 ### Doğrula
 
 ```bash
+cat /etc/exports
+sudo exportfs -v
 showmount -e localhost
 # UTM/test beklenen: /srv/files  *
 # Production beklenen: /srv/files  <API_SERVER_IP>
+```
+
+API sunucusunda:
+
+```bash
+mount | grep platform-files
+nc -vz <FILES_01_IP> 2049
+```
+
+Mac/izinsiz makinede production beklenen:
+
+```bash
+sudo mount -t nfs -o resvport <FILES_01_IP>:/srv/files /tmp/files01-test
+# access denied veya timeout
 ```
 
 ### Dizin yapısı
@@ -75,6 +100,9 @@ showmount -e localhost
 ## 2. Mac Kurulumu
 
 Mac, files-01'i `/Volumes/platform-files`'a mount eder.
+
+> Bu bölüm test/UTM içindir. Production minimum modunda Mac, Files-01'i mount edememelidir;
+> dosya erişimi yalnız Gateway → Uygulama API → FileService akışından yapılır.
 
 ### Ön koşullar
 - Docker Desktop kurulu ve çalışıyor
@@ -303,6 +331,7 @@ Production'a geçmeden önce şu kapılar tamamlanmalı:
 
 - NFS export `*` içermemeli; yalnız API sunucusu IP'si allowlist edilmeli.
 - Files-01 firewall TCP/2049'u yalnız API sunucusuna açmalı.
+- Mac/başka VM üzerinden NFS mount denemesi `access denied` veya timeout ile başarısız olmalı.
 - `staging` geçici, `export` kalıcı/backup kapsamı olarak ayrılmalı.
 - `certs/generate-certs.sh` kazara CA yenilemeyecek şekilde kullanılmalı; CA rotasyonu planlı yapılmalı.
 - `appsettings.json` dosyalarındaki local değerlerin fallback olduğu bilinmeli; production config `docker compose config` ve container env çıktısıyla doğrulanmalı.

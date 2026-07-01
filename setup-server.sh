@@ -22,6 +22,30 @@ FILES_01_IP="${FILES_01_IP:-192.168.64.3}"
 MOUNT_POINT="${MOUNT_POINT:-/mnt/platform-files}"
 NFS_EXPORT="${NFS_EXPORT:-/srv/files}"
 NFS_MOUNT_OPTIONS="${NFS_MOUNT_OPTIONS:-defaults,_netdev,nfsvers=4.2,proto=tcp}"
+NFS_MODE="${NFS_MODE:-test}" # test | production
+
+if [ "$NFS_MODE" = "production" ]; then
+    if ! command -v showmount >/dev/null 2>&1; then
+        echo "[HATA] NFS_MODE=production için showmount gerekli. nfs-common paketini kur."
+        exit 1
+    fi
+
+    EXPORTS_OUTPUT="$(showmount -e "$FILES_01_IP" 2>/dev/null || true)"
+    if echo "$EXPORTS_OUTPUT" | grep -E "^[[:space:]]*$NFS_EXPORT[[:space:]]+\\*" >/dev/null; then
+        echo "[HATA] Files-01 production için güvenli değil: $NFS_EXPORT hala '*' olarak export ediliyor."
+        echo "Önce Files-01 üzerinde çalıştır:"
+        echo "  sudo NFS_MODE=production API_SERVER_IP=<BU_API_SUNUCUSU_IP> ./tools/configure-files01-nfs.sh"
+        exit 1
+    elif echo "$EXPORTS_OUTPUT" | grep -E "^[[:space:]]*$NFS_EXPORT[[:space:]]+" >/dev/null; then
+        echo "[OK] NFS production kontrolü geçti ($NFS_EXPORT '*' olarak açık değil)"
+    else
+        echo "[UYARI] showmount export listesini doğrulayamadı; NFSv4/firewall nedeniyle normal olabilir."
+        echo "[UYARI] Mount + probe kontrolüyle devam edilecek."
+    fi
+elif [ "$NFS_MODE" != "test" ]; then
+    echo "[HATA] NFS_MODE test veya production olmalı. Gelen: $NFS_MODE"
+    exit 1
+fi
 
 if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
     echo "[--] $MOUNT_POINT zaten mount edilmiş"
