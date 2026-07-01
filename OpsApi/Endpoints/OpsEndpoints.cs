@@ -151,6 +151,7 @@ public static class OpsEndpoints
         {
             status = snapshot.Status,
             timestamp = snapshot.Timestamp,
+            reason = snapshot.Reason,
             count = snapshot.Services.Count,
             services = snapshot.Services.Select(c =>
             {
@@ -363,6 +364,7 @@ public static class OpsEndpoints
             var timestampText = GetString(doc.RootElement, "timestamp");
             DateTime.TryParse(timestampText, out var timestamp);
             var status = GetString(doc.RootElement, "status") ?? "unknown";
+            var reason = GetString(doc.RootElement, "reason");
             var containers = services.EnumerateArray().Select(s =>
             {
                 var created = GetString(s, "created");
@@ -386,6 +388,7 @@ public static class OpsEndpoints
             return new ServiceSnapshot(
                 status,
                 timestamp == default ? (DateTime?)null : timestamp.ToUniversalTime(),
+                reason,
                 containers);
         }
         catch
@@ -470,6 +473,7 @@ public static class OpsEndpoints
     private sealed record ServiceSnapshot(
         string Status,
         DateTime? Timestamp,
+        string? Reason,
         List<ServiceContainer> Services);
 
     private sealed record ServiceContainer(

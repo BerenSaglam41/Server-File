@@ -136,15 +136,29 @@ else
   reason="$(cat /tmp/platform-services-status.err 2>/dev/null || true)"
   python3 - "$STATUS_FILE" "$STAMP" "$reason" <<'PY'
 import json
+import os
 import sys
 
 path, stamp, reason = sys.argv[1:4]
+previous = {}
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            previous = json.load(f)
+    except Exception:
+        previous = {}
+
+previous_services = previous.get("services")
+if not isinstance(previous_services, list):
+    previous_services = []
+
 payload = {
     "status": "failed",
     "timestamp": stamp,
     "reason": reason[:500],
-    "count": 0,
-    "services": [],
+    "previous_timestamp": previous.get("timestamp"),
+    "count": len(previous_services),
+    "services": previous_services,
 }
 with open(path, "w", encoding="utf-8") as f:
     json.dump(payload, f, ensure_ascii=False, indent=2)

@@ -77,6 +77,7 @@ export interface OpsServices {
   count: number
   status?: string
   timestamp?: string | null
+  reason?: string | null
   services: {
     name: string
     service: string

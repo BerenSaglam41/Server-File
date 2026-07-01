@@ -170,8 +170,10 @@ Requires=docker.service
 [Service]
 Type=oneshot
 User=root
+WorkingDirectory=$PROJECT_DIR
 Environment=BACKUP_ROOT=$BACKUP_ROOT
 Environment=COMPOSE_FILE=$PROJECT_DIR/docker-compose.yml
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=$PROJECT_DIR/tools/services-status.sh
 StandardOutput=journal
 StandardError=journal

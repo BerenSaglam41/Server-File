@@ -331,6 +331,12 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
                   <span className="font-mono"> /backup/platform-files/.services-status.json</span> dosyasını kontrol et.
                 </div>
               ) : (
+              <>
+              {services.data.status && services.data.status !== 'success' && (
+                <div className="mb-3 text-xs text-yellow-300 bg-yellow-500/10 border border-yellow-600/30 rounded-lg px-3 py-2">
+                  Son servis ölçümü başarısız; son bilinen container listesi gösteriliyor.
+                </div>
+              )}
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
@@ -371,6 +377,7 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
                   </tbody>
                 </table>
               </div>
+              </>
               )
             ) : <Loading />}
           </Card>
