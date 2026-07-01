@@ -75,7 +75,21 @@ export interface OpsHealth {
 
 export interface OpsServices {
   count: number
-  services: { name: string; image: string; status: string; state: string; created: string }[]
+  status?: string
+  timestamp?: string | null
+  services: {
+    name: string
+    service: string
+    image: string
+    status: string
+    state: string
+    created: string
+    started_at?: string | null
+    age_seconds?: number | null
+    restart_count?: number | null
+    cpu?: string | null
+    memory?: string | null
+  }[]
 }
 
 export interface OpsDisk {
@@ -118,6 +132,7 @@ export interface OpsVersion {
   branch: string
   build_time: string
   started_at: string
+  uptime_seconds: number
   timestamp: string
 }
 

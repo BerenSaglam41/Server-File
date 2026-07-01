@@ -3,7 +3,8 @@ import type { AuthState, OpsHealth, OpsServices, OpsDisk, OpsAlerts, OpsBackups,
 
 interface Props {
   auth: AuthState
-  onBack: () => void
+  onBack?: () => void
+  onLogout: () => void
 }
 
 interface Slot<T> { data: T | null; err: string | null }
@@ -47,7 +48,32 @@ function Loading() {
   return <p className="text-xs text-gray-600">Yükleniyor…</p>
 }
 
-export default function OpsConsole({ auth, onBack }: Props) {
+function formatDate(value: string | null | undefined) {
+  if (!value) return '—'
+  const compact = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/)
+  if (compact) return formatDate(`${compact[1]}-${compact[2]}-${compact[3]}T${compact[4]}:${compact[5]}:${compact[6]}Z`)
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString('tr-TR', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function formatBackupDate(value: string) {
+  const m = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/)
+  if (!m) return value
+  return formatDate(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`)
+}
+
+function formatDuration(seconds: number | null | undefined) {
+  if (seconds == null) return '—'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return `${days}g ${hours}s`
+  if (hours > 0) return `${hours}s ${mins}d`
+  return `${Math.max(1, mins)}d`
+}
+
+export default function OpsConsole({ auth, onBack, onLogout }: Props) {
   const [health,   setHealth]   = useState<Slot<OpsHealth>>  ({ data: null, err: null })
   const [services, setServices] = useState<Slot<OpsServices>>({ data: null, err: null })
   const [disk,     setDisk]     = useState<Slot<OpsDisk>>    ({ data: null, err: null })
@@ -93,15 +119,17 @@ export default function OpsConsole({ auth, onBack }: Props) {
       {/* Header */}
       <header className="bg-gray-950 border-b border-gray-800 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
-            title="Geri Dön"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+              title="Geri Dön"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+          )}
           <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center flex-shrink-0">
             <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -121,11 +149,23 @@ export default function OpsConsole({ auth, onBack }: Props) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
+            <span className="sr-only">Yenile</span>
           </button>
           <div className="hidden sm:block text-right ml-2">
             <p className="text-xs font-medium text-gray-200">{auth.user.preferred_username}</p>
             <p className="text-xs text-gray-500">Ops</p>
           </div>
+          <button
+            onClick={onLogout}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+            title="Çıkış Yap"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            <span className="sr-only">Çıkış Yap</span>
+          </button>
         </div>
       </header>
 
@@ -231,8 +271,9 @@ export default function OpsConsole({ auth, onBack }: Props) {
                   ['Ortam',      version.data.environment],
                   ['Branch',     version.data.branch === 'unknown' ? '—' : version.data.branch],
                   ['Commit',     version.data.commit_short === 'unknown' ? '—' : version.data.commit_short],
-                  ['Build',      version.data.build_time === 'unknown' ? '—' : new Date(version.data.build_time).toLocaleString('tr-TR')],
-                  ['Başlangıç',  new Date(version.data.started_at).toLocaleString('tr-TR')],
+                  ['Build',      version.data.build_time === 'unknown' ? '—' : formatDate(version.data.build_time)],
+                  ['Uptime',     formatDuration(version.data.uptime_seconds)],
+                  ['Başlangıç',  formatDate(version.data.started_at)],
                 ] as [string, string][]).map(([k, v]) => (
                   <div key={k} className="contents">
                     <dt className="text-gray-500">{k}</dt>
@@ -245,22 +286,33 @@ export default function OpsConsole({ auth, onBack }: Props) {
 
           {/* Konteynerler */}
           <Card wide>
-            <Label>Konteynerler {services.data ? `(${services.data.count})` : ''}</Label>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <Label>Konteynerler {services.data ? `(${services.data.count})` : ''}</Label>
+              {services.data?.timestamp && (
+                <span className="text-[11px] text-gray-500">Snapshot: {formatDate(services.data.timestamp)}</span>
+              )}
+            </div>
             {services.err ? <ErrText msg={services.err} /> : services.data ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="text-gray-500 border-b border-gray-700">
-                      <th className="text-left pb-2 font-medium pr-4">İsim</th>
-                      <th className="text-left pb-2 font-medium pr-4 hidden sm:table-cell">İmaj</th>
-                      <th className="text-left pb-2 font-medium pr-4">Durum</th>
-                      <th className="text-left pb-2 font-medium">Detay</th>
+                      <th className="text-left pb-2 font-medium pr-4">Container</th>
+                      <th className="text-left pb-2 font-medium pr-4 hidden sm:table-cell">Image</th>
+                      <th className="text-left pb-2 font-medium pr-4">State</th>
+                      <th className="text-right pb-2 font-medium pr-4">CPU</th>
+                      <th className="text-right pb-2 font-medium pr-4">RAM</th>
+                      <th className="text-right pb-2 font-medium pr-4">Restart</th>
+                      <th className="text-right pb-2 font-medium">Age</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700/40">
                     {services.data.services.map(s => (
                       <tr key={s.name}>
-                        <td className="py-2 pr-4 text-gray-200 font-medium">{s.name}</td>
+                        <td className="py-2 pr-4 text-gray-200 font-medium">
+                          <div>{s.service || s.name}</div>
+                          <div className="text-[11px] text-gray-600 font-normal">{s.name}</div>
+                        </td>
                         <td className="py-2 pr-4 text-gray-500 font-mono hidden sm:table-cell">
                           {s.image.split(':')[0]?.split('/').pop() ?? s.image}
                         </td>
@@ -270,7 +322,10 @@ export default function OpsConsole({ auth, onBack }: Props) {
                             <span className="text-gray-300">{s.state}</span>
                           </div>
                         </td>
-                        <td className="py-2 text-gray-500">{s.status}</td>
+                        <td className="py-2 pr-4 text-right text-gray-500">{s.cpu || '—'}</td>
+                        <td className="py-2 pr-4 text-right text-gray-500">{s.memory || '—'}</td>
+                        <td className="py-2 pr-4 text-right text-gray-500">{s.restart_count ?? '—'}</td>
+                        <td className="py-2 text-right text-gray-500">{formatDuration(s.age_seconds)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -286,7 +341,7 @@ export default function OpsConsole({ auth, onBack }: Props) {
               {backups.data?.last_backup && (
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                   <Dot state={backups.data.last_status === 'success' ? 'healthy' : 'unhealthy'} />
-                  Son: {backups.data.last_backup.replace('T', ' ').slice(0, 16)} UTC
+                  Son: {formatDate(backups.data.last_backup)}
                 </div>
               )}
             </div>
@@ -312,7 +367,7 @@ export default function OpsConsole({ auth, onBack }: Props) {
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="text-gray-500 border-b border-gray-700">
-                          <th className="text-left pb-2 font-medium pr-4">Tarih (UTC)</th>
+                          <th className="text-left pb-2 font-medium pr-4">Tarih</th>
                           <th className="text-right pb-2 font-medium pr-4">Dosyalar</th>
                           <th className="text-right pb-2 font-medium pr-4">Veritabanı</th>
                           <th className="text-right pb-2 font-medium">Toplam</th>
@@ -321,7 +376,7 @@ export default function OpsConsole({ auth, onBack }: Props) {
                       <tbody className="divide-y divide-gray-700/40">
                         {backups.data.backups.slice(0, 7).map(b => (
                           <tr key={b.date}>
-                            <td className="py-1.5 pr-4 text-gray-300 font-mono">{b.date}</td>
+                            <td className="py-1.5 pr-4 text-gray-300">{formatBackupDate(b.date)}</td>
                             <td className="py-1.5 pr-4 text-right text-gray-400">
                               {b.files_size_mb != null ? `${b.files_size_mb} MB` : '—'}
                             </td>

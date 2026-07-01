@@ -51,7 +51,8 @@ public static class OpsEndpoints
 
     private static async Task<object> BuildHealthAsync(IHttpClientFactory factory, NpgsqlDataSource db)
     {
-        var containers = LoadServiceStatus();
+        var serviceSnapshot = LoadServiceStatus();
+        var containers = serviceSnapshot?.Services;
         var results = new List<object>();
         var overall = "healthy";
 
@@ -71,7 +72,8 @@ public static class OpsEndpoints
         await AddGatewayHealthAsync();
         await AddPostgresHealthAsync();
 
-        Add("fileservice", IsContainerRunning(containers, "fileservice") ? "healthy" : "unhealthy", null, "service_status");
+        Add("fileservice", IsContainerRunning(containers, "fileservice") ? "healthy" : "degraded", null,
+            serviceSnapshot is null ? "service_status_missing" : "service_status");
         Add("opsapi", "healthy", null, "self");
 
         return new { status = overall, timestamp = DateTime.UtcNow, services = results };
@@ -141,22 +143,30 @@ public static class OpsEndpoints
 
     private static Task<object> BuildServicesAsync()
     {
-        var containers = LoadServiceStatus();
-        if (containers is null)
+        var snapshot = LoadServiceStatus();
+        if (snapshot is null)
             return Task.FromResult<object>(new { note = "Servis status dosyası yok; tools/services-status.sh henüz çalışmadı", count = 0, services = Array.Empty<object>() });
 
         return Task.FromResult<object>(new
         {
-            count = containers.Count,
-            services = containers.Select(c =>
+            status = snapshot.Status,
+            timestamp = snapshot.Timestamp,
+            count = snapshot.Services.Count,
+            services = snapshot.Services.Select(c =>
             {
                 return new
                 {
                     name = c.Name,
+                    service = c.Service,
                     image = c.Image,
                     status = c.Status,
                     state = c.State,
                     created = c.Created,
+                    started_at = c.StartedAt,
+                    age_seconds = c.AgeSeconds,
+                    restart_count = c.RestartCount,
+                    cpu = c.Cpu,
+                    memory = c.Memory,
                 };
             }).ToList()
         });
@@ -311,6 +321,7 @@ public static class OpsEndpoints
     {
         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
         var commit = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown";
+        var startedAt = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
         return new
         {
             service     = "OpsApi",
@@ -322,12 +333,13 @@ public static class OpsEndpoints
             commit_short = commit == "unknown" ? "unknown" : commit[..Math.Min(commit.Length, 8)],
             branch      = Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "unknown",
             build_time  = Environment.GetEnvironmentVariable("BUILD_TIME") ?? "unknown",
-            started_at  = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
+            started_at  = startedAt,
+            uptime_seconds = (long)Math.Max(0, (DateTime.UtcNow - startedAt).TotalSeconds),
             timestamp   = DateTime.UtcNow,
         };
     }
 
-    private static List<ServiceContainer>? LoadServiceStatus()
+    private static ServiceSnapshot? LoadServiceStatus()
     {
         var path = Path.Combine(StatusRoot, ".services-status.json");
         if (!File.Exists(path))
@@ -340,17 +352,33 @@ public static class OpsEndpoints
                 services.ValueKind != JsonValueKind.Array)
                 return null;
 
-            return services.EnumerateArray().Select(s =>
+            var timestampText = GetString(doc.RootElement, "timestamp");
+            DateTime.TryParse(timestampText, out var timestamp);
+            var status = GetString(doc.RootElement, "status") ?? "unknown";
+            var containers = services.EnumerateArray().Select(s =>
             {
                 var created = GetString(s, "created");
                 DateTime.TryParse(created, out var createdAt);
+                var startedAt = GetString(s, "started_at");
+                DateTime.TryParse(startedAt, out var started);
                 return new ServiceContainer(
                     GetString(s, "name") ?? GetString(s, "service") ?? "?",
+                    GetString(s, "service") ?? GetString(s, "name") ?? "?",
                     GetString(s, "image") ?? "",
                     GetString(s, "status") ?? "",
                     GetString(s, "state") ?? "",
-                    createdAt == default ? DateTime.MinValue : createdAt.ToUniversalTime());
+                    createdAt == default ? DateTime.MinValue : createdAt.ToUniversalTime(),
+                    started == default ? (DateTime?)null : started.ToUniversalTime(),
+                    TryParseInt(GetString(s, "age_seconds")),
+                    TryParseInt(GetString(s, "restart_count")),
+                    GetString(s, "cpu"),
+                    GetString(s, "memory"));
             }).ToList();
+
+            return new ServiceSnapshot(
+                status,
+                timestamp == default ? (DateTime?)null : timestamp.ToUniversalTime(),
+                containers);
         }
         catch
         {
@@ -360,8 +388,11 @@ public static class OpsEndpoints
 
     private static bool IsContainerRunning(List<ServiceContainer>? containers, string namePart) =>
         containers?.Any(c =>
-            c.Name.Contains(namePart, StringComparison.OrdinalIgnoreCase) &&
-            c.State.Equals("running", StringComparison.OrdinalIgnoreCase)) == true;
+            (c.Name.Contains(namePart, StringComparison.OrdinalIgnoreCase) ||
+             c.Service.Contains(namePart, StringComparison.OrdinalIgnoreCase)) &&
+            (c.State.Equals("running", StringComparison.OrdinalIgnoreCase) ||
+             c.Status.StartsWith("Up", StringComparison.OrdinalIgnoreCase) ||
+             c.Status.Contains("healthy", StringComparison.OrdinalIgnoreCase))) == true;
 
     private static string? GetString(JsonElement element, string name)
     {
@@ -428,10 +459,21 @@ public static class OpsEndpoints
     private static int? TryParseInt(string? s) =>
         int.TryParse(s, out var v) ? v : null;
 
+    private sealed record ServiceSnapshot(
+        string Status,
+        DateTime? Timestamp,
+        List<ServiceContainer> Services);
+
     private sealed record ServiceContainer(
         string Name,
+        string Service,
         string Image,
         string Status,
         string State,
-        DateTime Created);
+        DateTime Created,
+        DateTime? StartedAt,
+        int? AgeSeconds,
+        int? RestartCount,
+        string? Cpu,
+        string? Memory);
 }

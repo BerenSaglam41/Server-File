@@ -161,6 +161,17 @@ status="$(curl -k -sS -o "$WORK_DIR/ops-login.body" -w '%{http_code}' \
   --data "{\"username\":\"$OPS_USER\",\"password\":\"$OPS_PASS\"}")"
 expect_status "200" "$status" "Ops login" "$WORK_DIR/ops-login.body"
 
+log "/ops/me no-token erişim reddi kontrol ediliyor"
+status="$(curl -k -sS -o "$WORK_DIR/ops-no-token.body" -w '%{http_code}' \
+  "$BASE_URL/ops/me")"
+expect_status "401" "$status" "/ops/me no-token" "$WORK_DIR/ops-no-token.body"
+
+log "Ops rolü olmayan HR kullanıcının /ops/dashboard erişimi gizleniyor"
+status="$(curl -k -sS -o "$WORK_DIR/ops-hr.body" -w '%{http_code}' \
+  -b "$HR_COOKIE" \
+  "$BASE_URL/ops/dashboard")"
+expect_status "404" "$status" "HR ops rolü yok -> 404" "$WORK_DIR/ops-hr.body"
+
 for endpoint in me health services disk backups version dashboard; do
   log "/ops/$endpoint kontrol ediliyor"
   status="$(curl -k -sS -o "$WORK_DIR/ops-$endpoint.body" -w '%{http_code}' \
@@ -168,6 +179,18 @@ for endpoint in me health services disk backups version dashboard; do
     "$BASE_URL/ops/$endpoint")"
   expect_status "200" "$status" "/ops/$endpoint" "$WORK_DIR/ops-$endpoint.body"
 done
+
+log "Ops logout sonrası oturum kapanışı kontrol ediliyor"
+status="$(curl -k -sS -o "$WORK_DIR/ops-logout.body" -w '%{http_code}' \
+  -b "$OPS_COOKIE" \
+  -c "$OPS_COOKIE" \
+  -X POST "$BASE_URL/api/auth/logout")"
+expect_status "200" "$status" "Ops logout" "$WORK_DIR/ops-logout.body"
+
+status="$(curl -k -sS -o "$WORK_DIR/ops-after-logout.body" -w '%{http_code}' \
+  -b "$OPS_COOKIE" \
+  "$BASE_URL/ops/me")"
+expect_status "401" "$status" "Ops logout sonrası /ops/me" "$WORK_DIR/ops-after-logout.body"
 
 log "Audit son kayıtlar okunuyor"
 postgres_container="$(docker compose -f "$COMPOSE_FILE" ps -q postgres 2>/dev/null || true)"

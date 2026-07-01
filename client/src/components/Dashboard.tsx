@@ -24,7 +24,8 @@ export default function Dashboard({ auth, onLogout }: Props) {
     ...(hasOps ? [{ value: 'ops' as const, label: 'Ops' }] : []),
   ]
 
-  const [view, setView]         = useState<View>(availableViews[0]?.value ?? 'personnel')
+  const defaultView = hasOps ? 'ops' : availableViews[0]?.value ?? 'personnel'
+  const [view, setView]         = useState<View>(defaultView)
   const [query, setQuery]       = useState('')
   const [results, setResults]   = useState<Personnel[]>([])
   const [searching, setSearching] = useState(false)
@@ -66,7 +67,14 @@ export default function Dashboard({ auth, onLogout }: Props) {
     : 'Personel'
 
   if (view === 'ops' && hasOps) {
-    return <OpsConsole auth={auth} onBack={() => setView(availableViews[0]?.value ?? 'personnel')} />
+    const fallbackView = availableViews.find(v => v.value !== 'ops')?.value
+    return (
+      <OpsConsole
+        auth={auth}
+        onBack={fallbackView ? () => setView(fallbackView) : undefined}
+        onLogout={onLogout}
+      />
+    )
   }
 
   return (
