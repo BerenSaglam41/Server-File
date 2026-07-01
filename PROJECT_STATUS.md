@@ -1877,6 +1877,14 @@ Ayrıca NFS'in yalnızca api sunucusuna açık olduğu iddiası ağ seviyesinde 
 (111)` `0.0.0.0`'da dinliyor ama ufw allow listesinde olmadığı için varsayılan deny ile bloklanıyor. Yani
 koruma hem `/etc/exports` ACL seviyesinde hem firewall seviyesinde çift katmanlı ve gerçek.
 
+**Bulunan eksik:** files01'in aksine api sunucusunda (192.168.64.5) `ufw` **inactive** — host firewall hiç
+aktif değil. `ss -tlnp` çıktısı `22` (SSH), `111` (rpcbind — NFS client tarafı, kendi mount'u için), `5090`
+(gateway) portlarının `0.0.0.0` üzerinden açık olduğunu, hiçbir OS seviyesi filtreleme olmadan gösteriyor.
+Şu an tek public port zaten sadece `5090` (docker-compose diğer servisleri publish etmiyor) ama host
+firewall'ın kapalı olması "Firewall + NFS allowlist" production kapısını yarım bırakıyor — NFS tarafı
+(files01) kilitli, api-server tarafı değil. Öneri: api sunucusunda da `ufw` etkinleştirilip yalnızca
+`22/tcp` (yönetim) ve `5090/tcp` (gateway) allow edilmeli; `111` dış ağdan erişilmemeli.
+
 ---
 
 ## SIRADAKİ ADIM
