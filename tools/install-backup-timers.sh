@@ -23,6 +23,8 @@ BACKUP_ROOT="${BACKUP_ROOT:-/backup/platform-files}"
 BACKUP_RETAIN="${BACKUP_RETAIN:-14}"
 BACKUP_TIME="${BACKUP_TIME:-*-*-* 02:00:00 UTC}"
 RESTORE_TIME="${RESTORE_TIME:-Sun *-*-* 03:00:00 UTC}"
+DISK_WARN_PCT="${DISK_WARN_PCT:-80}"
+DISK_CRIT_PCT="${DISK_CRIT_PCT:-90}"
 SYSTEMD_DIR="/etc/systemd/system"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -40,7 +42,7 @@ echo "  RESTORE_TIME : $RESTORE_TIME"
 echo ""
 
 # Gerekli scriptlerin varlığını doğrula
-for script in tools/backup-files01.sh tools/restore-test.sh; do
+for script in tools/backup-files01.sh tools/restore-test.sh tools/disk-check.sh; do
   if [ ! -x "$PROJECT_DIR/$script" ]; then
     echo "[HATA] Script bulunamadı veya çalıştırılabilir değil: $PROJECT_DIR/$script" >&2
     echo "chmod +x $PROJECT_DIR/$script" >&2
@@ -123,6 +125,41 @@ WantedBy=timers.target
 EOF
 echo "[OK] $SYSTEMD_DIR/platform-restore-test.timer yazıldı"
 
+# --- platform-disk-check.service ---
+cat > "$SYSTEMD_DIR/platform-disk-check.service" <<EOF
+[Unit]
+Description=Platform disk doluluk kontrolü — API sunucusu ve Files-01
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=BACKUP_ROOT=$BACKUP_ROOT
+Environment=STORAGE_MOUNT=$STORAGE_ROOT
+Environment=WARN_PCT=$DISK_WARN_PCT
+Environment=CRIT_PCT=$DISK_CRIT_PCT
+ExecStart=$PROJECT_DIR/tools/disk-check.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=platform-disk-check
+EOF
+echo "[OK] $SYSTEMD_DIR/platform-disk-check.service yazıldı"
+
+# --- platform-disk-check.timer (her saat) ---
+cat > "$SYSTEMD_DIR/platform-disk-check.timer" <<EOF
+[Unit]
+Description=Platform disk doluluk kontrol timer (saatlik)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+echo "[OK] $SYSTEMD_DIR/platform-disk-check.timer yazıldı"
+
 # Reload + enable + start
 systemctl daemon-reload
 
@@ -132,6 +169,9 @@ echo "[OK] platform-backup.timer aktif"
 systemctl enable --now platform-restore-test.timer
 echo "[OK] platform-restore-test.timer aktif"
 
+systemctl enable --now platform-disk-check.timer
+echo "[OK] platform-disk-check.timer aktif"
+
 echo ""
 echo "=== Kurulum tamamlandı ==="
 echo ""
@@ -140,9 +180,12 @@ echo ""
 echo "Logları izlemek için:"
 echo "  journalctl -u platform-backup -f"
 echo "  journalctl -u platform-restore-test -f"
+echo "  journalctl -u platform-disk-check -f"
 echo ""
 echo "Manuel test (şimdi çalıştır):"
 echo "  systemctl start platform-backup.service"
 echo "  journalctl -u platform-backup --no-pager -n 40"
 echo "  systemctl start platform-restore-test.service"
 echo "  journalctl -u platform-restore-test --no-pager -n 40"
+echo "  systemctl start platform-disk-check.service"
+echo "  journalctl -u platform-disk-check --no-pager -n 20"

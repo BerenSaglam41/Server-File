@@ -238,6 +238,28 @@ else
     fi
 fi
 
+# 8. Disk doluluk kontrolü
+DISK_STATUS="$BACKUP_ROOT/.disk-status"
+echo ""
+echo "[..] Disk doluluk kontrolü..."
+if [ -f "$DISK_STATUS" ]; then
+    disk_st="$(grep '^status=' "$DISK_STATUS" | cut -d= -f2)"
+    api_pct="$(grep '^api_server_pct=' "$DISK_STATUS" | cut -d= -f2)"
+    f01_pct="$(grep '^files01_pct=' "$DISK_STATUS" | cut -d= -f2)"
+    reason="$(grep '^reason=' "$DISK_STATUS" | cut -d= -f2)"
+    if [ "$disk_st" = "critical" ]; then
+        echo "[HATA] Disk kritik: api_server=%${api_pct}, files01=%${f01_pct} (${reason})"
+        echo "       docker system prune --force  ile build cache temizlenebilir"
+    elif [ "$disk_st" = "warning" ]; then
+        echo "[UYARI] Disk uyarı: api_server=%${api_pct}, files01=%${f01_pct} (${reason})"
+    else
+        echo "[OK] Disk normal: api_server=%${api_pct}, files01=%${f01_pct}"
+    fi
+else
+    echo "[--] Disk check henüz çalışmadı. Kurmak için:"
+    echo "     sudo bash tools/install-backup-timers.sh"
+fi
+
 echo ""
 echo "=== Kurulum tamamlandı ==="
 echo "Durum: docker compose ps"
