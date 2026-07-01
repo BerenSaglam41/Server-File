@@ -27,6 +27,14 @@
       {
         "name": "personnel.files.write.all",
         "description": "Tüm personel dosyalarını yükler/arşivler"
+      },
+      {
+        "name": "ops.read",
+        "description": "Ops console okuma erişimi"
+      },
+      {
+        "name": "ops.admin",
+        "description": "Ops console tam erişim — backup/restore tetikleme"
       }
     ]
   },
@@ -149,34 +157,719 @@
     }
   ],
   "users": [
-    {"username":"hr001","email":"zeynep.kaya@demo.local","enabled":true,"emailVerified":true,"firstName":"Zeynep","lastName":"Kaya","requiredActions":[],"realmRoles":["personnel.files.read.all","personnel.files.write.all"],"attributes":{"personnel_id":["HR001"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"adm001","email":"admin@demo.local","enabled":true,"emailVerified":true,"firstName":"Admin","lastName":"User","requiredActions":[],"realmRoles":["personnel.files.read.all","personnel.files.write.all"],"attributes":{"personnel_id":["ADM001"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"m001","email":"ayse.demir@demo.local","enabled":true,"emailVerified":true,"firstName":"Ayse","lastName":"Demir","requiredActions":[],"realmRoles":["personnel.files.read.team"],"attributes":{"personnel_id":["M001"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"m002","email":"mehmet.arslan@demo.local","enabled":true,"emailVerified":true,"firstName":"Mehmet","lastName":"Arslan","requiredActions":[],"realmRoles":["personnel.files.read.team"],"attributes":{"personnel_id":["M002"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"m003","email":"elif.sahin@demo.local","enabled":true,"emailVerified":true,"firstName":"Elif","lastName":"Sahin","requiredActions":[],"realmRoles":["personnel.files.read.team"],"attributes":{"personnel_id":["M003"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p001","email":"ahmet.yilmaz@demo.local","enabled":true,"emailVerified":true,"firstName":"Ahmet","lastName":"Yilmaz","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P001"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p002","email":"can.aydin@demo.local","enabled":true,"emailVerified":true,"firstName":"Can","lastName":"Aydin","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P002"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p003","email":"deniz.koc@demo.local","enabled":true,"emailVerified":true,"firstName":"Deniz","lastName":"Koc","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P003"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p004","email":"ece.polat@demo.local","enabled":true,"emailVerified":true,"firstName":"Ece","lastName":"Polat","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P004"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p005","email":"burak.celik@demo.local","enabled":true,"emailVerified":true,"firstName":"Burak","lastName":"Celik","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P005"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p006","email":"selin.kurt@demo.local","enabled":true,"emailVerified":true,"firstName":"Selin","lastName":"Kurt","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P006"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p007","email":"onur.aslan@demo.local","enabled":true,"emailVerified":true,"firstName":"Onur","lastName":"Aslan","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P007"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p008","email":"melis.ozturk@demo.local","enabled":true,"emailVerified":true,"firstName":"Melis","lastName":"Ozturk","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P008"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p009","email":"emre.yildiz@demo.local","enabled":true,"emailVerified":true,"firstName":"Emre","lastName":"Yildiz","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P009"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p010","email":"naz.kaplan@demo.local","enabled":true,"emailVerified":true,"firstName":"Naz","lastName":"Kaplan","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P010"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p011","email":"kaan.ergin@demo.local","enabled":true,"emailVerified":true,"firstName":"Kaan","lastName":"Ergin","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P011"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p012","email":"aylin.bozkurt@demo.local","enabled":true,"emailVerified":true,"firstName":"Aylin","lastName":"Bozkurt","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P012"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p013","email":"umut.aksoy@demo.local","enabled":true,"emailVerified":true,"firstName":"Umut","lastName":"Aksoy","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P013"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p014","email":"buse.sen@demo.local","enabled":true,"emailVerified":true,"firstName":"Buse","lastName":"Sen","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P014"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p015","email":"mert.kara@demo.local","enabled":true,"emailVerified":true,"firstName":"Mert","lastName":"Kara","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P015"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p016","email":"derya.gunes@demo.local","enabled":true,"emailVerified":true,"firstName":"Derya","lastName":"Gunes","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P016"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p017","email":"tuna.eren@demo.local","enabled":true,"emailVerified":true,"firstName":"Tuna","lastName":"Eren","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P017"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p018","email":"esra.bilir@demo.local","enabled":true,"emailVerified":true,"firstName":"Esra","lastName":"Bilir","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P018"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p019","email":"kerem.tas@demo.local","enabled":true,"emailVerified":true,"firstName":"Kerem","lastName":"Tas","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P019"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p020","email":"nil.ozdemir@demo.local","enabled":true,"emailVerified":true,"firstName":"Nil","lastName":"Ozdemir","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P020"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p021","email":"alp.keskin@demo.local","enabled":true,"emailVerified":true,"firstName":"Alp","lastName":"Keskin","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P021"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p022","email":"seda.acar@demo.local","enabled":true,"emailVerified":true,"firstName":"Seda","lastName":"Acar","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P022"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p023","email":"okan.durmaz@demo.local","enabled":true,"emailVerified":true,"firstName":"Okan","lastName":"Durmaz","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P023"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]},
-    {"username":"p024","email":"irem.uslu@demo.local","enabled":true,"emailVerified":true,"firstName":"Irem","lastName":"Uslu","requiredActions":[],"realmRoles":["personnel.files.read.self"],"attributes":{"personnel_id":["P024"]},"credentials":[{"type":"password","value":"Demo1234!","temporary":false}]}
+    {
+      "username": "hr001",
+      "email": "zeynep.kaya@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Zeynep",
+      "lastName": "Kaya",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.all",
+        "personnel.files.write.all"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "HR001"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "adm001",
+      "email": "admin@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "User",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.all",
+        "personnel.files.write.all"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "ADM001"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "m001",
+      "email": "ayse.demir@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ayse",
+      "lastName": "Demir",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.team"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "M001"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "m002",
+      "email": "mehmet.arslan@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Mehmet",
+      "lastName": "Arslan",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.team"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "M002"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "m003",
+      "email": "elif.sahin@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Elif",
+      "lastName": "Sahin",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.team"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "M003"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p001",
+      "email": "ahmet.yilmaz@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ahmet",
+      "lastName": "Yilmaz",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P001"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p002",
+      "email": "can.aydin@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Can",
+      "lastName": "Aydin",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P002"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p003",
+      "email": "deniz.koc@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Deniz",
+      "lastName": "Koc",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P003"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p004",
+      "email": "ece.polat@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ece",
+      "lastName": "Polat",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P004"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p005",
+      "email": "burak.celik@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Burak",
+      "lastName": "Celik",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P005"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p006",
+      "email": "selin.kurt@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Selin",
+      "lastName": "Kurt",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P006"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p007",
+      "email": "onur.aslan@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Onur",
+      "lastName": "Aslan",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P007"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p008",
+      "email": "melis.ozturk@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Melis",
+      "lastName": "Ozturk",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P008"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p009",
+      "email": "emre.yildiz@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Emre",
+      "lastName": "Yildiz",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P009"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p010",
+      "email": "naz.kaplan@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Naz",
+      "lastName": "Kaplan",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P010"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p011",
+      "email": "kaan.ergin@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Kaan",
+      "lastName": "Ergin",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P011"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p012",
+      "email": "aylin.bozkurt@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Aylin",
+      "lastName": "Bozkurt",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P012"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p013",
+      "email": "umut.aksoy@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Umut",
+      "lastName": "Aksoy",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P013"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p014",
+      "email": "buse.sen@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Buse",
+      "lastName": "Sen",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P014"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p015",
+      "email": "mert.kara@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Mert",
+      "lastName": "Kara",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P015"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p016",
+      "email": "derya.gunes@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Derya",
+      "lastName": "Gunes",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P016"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p017",
+      "email": "tuna.eren@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Tuna",
+      "lastName": "Eren",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P017"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p018",
+      "email": "esra.bilir@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Esra",
+      "lastName": "Bilir",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P018"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p019",
+      "email": "kerem.tas@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Kerem",
+      "lastName": "Tas",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P019"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p020",
+      "email": "nil.ozdemir@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Nil",
+      "lastName": "Ozdemir",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P020"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p021",
+      "email": "alp.keskin@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alp",
+      "lastName": "Keskin",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P021"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p022",
+      "email": "seda.acar@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Seda",
+      "lastName": "Acar",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P022"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p023",
+      "email": "okan.durmaz@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Okan",
+      "lastName": "Durmaz",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P023"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "p024",
+      "email": "irem.uslu@demo.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Irem",
+      "lastName": "Uslu",
+      "requiredActions": [],
+      "realmRoles": [
+        "personnel.files.read.self"
+      ],
+      "attributes": {
+        "personnel_id": [
+          "P024"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo1234!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "opsadmin",
+      "enabled": true,
+      "email": "opsadmin@platform.internal",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ops123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "ops.read",
+        "ops.admin"
+      ]
+    }
   ]
 }

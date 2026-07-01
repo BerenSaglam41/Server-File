@@ -135,6 +135,26 @@ services:
     networks:
       - platform-net
 
+  # ── OpsApi ────────────────────────────────────────────────────────────────
+  opsapi:
+    build:
+      context: ./OpsApi
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Keycloak__Authority: "http://localhost:8080/realms/platform"
+      Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
+      Keycloak__RequireHttpsMetadata: "false"
+      STATUS_ROOT: "/ops/status-files"
+    volumes:
+      - /backup/platform-files:/ops/status-files:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - platform-net
+
   # ── Client (React SPA) ────────────────────────────────────────────────────
   client:
     build:
@@ -156,6 +176,7 @@ services:
     depends_on:
       - yonetimapi
       - flotaapi
+      - opsapi
       - client
     networks:
       - platform-net
