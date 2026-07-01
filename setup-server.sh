@@ -166,13 +166,25 @@ docker compose $COMPOSE_ARGS restart fileservice
 echo "[OK] Fileservice NFS ile çalışıyor"
 
 echo "[..] Fileservice container storage yazma testi yapılıyor..."
-if ! docker compose $COMPOSE_ARGS exec -T fileservice sh -lc 'tmp=/app/storage/staging/.setup-write-test && echo ok > "$tmp" && rm -f "$tmp"'; then
-    echo "[HATA] FileService container /app/storage/staging alanına yazamıyor."
+if ! docker compose $COMPOSE_ARGS exec -T fileservice sh -lc '
+set -eu
+rel="personnel/setup/setup-write-test-$(date +%s).txt"
+staging="/app/storage/staging/$rel"
+export="/app/storage/export/$rel"
+mkdir -p "$(dirname "$staging")" "$(dirname "$export")"
+echo ok > "$staging"
+test -s "$staging"
+sha256sum "$staging" >/dev/null
+mv "$staging" "$export"
+test -s "$export"
+rm -f "$export"
+'; then
+    echo "[HATA] FileService container staging -> export upload akışını tamamlayamıyor."
     echo "Files-01 production minimum için setup-files01.sh tekrar çalıştırılmalı:"
     echo "  sudo NFS_MODE=production API_SERVER_IP=<API_SUNUCUSU_IP> bash setup-files01.sh"
     exit 1
 fi
-echo "[OK] Fileservice container storage yazabiliyor"
+echo "[OK] Fileservice container staging -> export yazma/taşıma testi geçti"
 
 # 6. DB schema + seed (tablolar yoksa)
 echo "[..] Veritabanı schema kontrol ediliyor..."

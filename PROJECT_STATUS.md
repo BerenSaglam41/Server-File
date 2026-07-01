@@ -1637,6 +1637,11 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
 
 - **Production hardening**: `runbooks/production-hardening.md` eklendi. NFS `*` export sadece UTM/test kabul edilir; prod minimumda `/srv/files <API_SERVER_IP>(rw,...)` ve firewall TCP/2049 allowlist gerekir. Files-01 için `tools/configure-files01-nfs.sh` eklendi (`NFS_MODE=production API_SERVER_IP=...`). Katı modelde runtime export'u read-only, publish/staging ayrı kontrollü süreç olur.
 - **Backup + Restore**: `tools/backup-files01.sh` (rsync export/ + pg_dump) + `tools/restore-test.sh` (hash doğrulama). `restore-tests/` dizini boş.
+- **Upload storage debug**: FileService `storage_write_failed` durumunda artık exception detayını
+  container loguna yazar. `setup-server.sh` basit staging yazma yerine gerçek upload yolunu
+  doğrular: `staging/personnel/...` yazma → SHA256 okuma → `export/personnel/...` içine `mv`.
+  Bu test geçmezse setup durur; geçer ama upload 503 dönerse sebep `fileservice` logunda
+  net exception olarak aranır.
 - **API hata sözlüğü tutarlılığı**: FileService tarafında bazı durumlar teknik olarak `result=denied`
   audit edilirken YonetimApi/client upload cevabında `error` alanı daha genel kalabiliyor. Production
   polish için FileService `reason_code` değerleri (`data_scope_denied`, `policy_denied`,

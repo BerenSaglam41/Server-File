@@ -253,8 +253,10 @@ public static class FileEndpoints
         HttpRequest request,
         AppDbContext db,
         AuditService audit,
-        IConfiguration config)
+        IConfiguration config,
+        ILoggerFactory loggerFactory)
     {
+        var logger = loggerFactory.CreateLogger("FileServiceApi.FileUpload");
         var appCode = ExtractAppCode(request.HttpContext.User);
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
         var actor     = request.Headers["X-Actor-User-Id"].FirstOrDefault();
@@ -393,15 +395,21 @@ public static class FileEndpoints
             Directory.CreateDirectory(Path.GetDirectoryName(exportFull)!);
             File.Move(stagingFull, exportFull, overwrite: false);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
             if (File.Exists(stagingFull)) File.Delete(stagingFull);
+            logger.LogError(ex,
+                "Storage write failed during file create. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
+                appCode, domain, entityType, entityId, relationType, relativePath, correlationId);
             await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
         {
             if (File.Exists(stagingFull)) File.Delete(stagingFull);
+            logger.LogError(ex,
+                "Storage path failed during file create. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
+                appCode, domain, entityType, entityId, relationType, relativePath, correlationId);
             await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
         }
