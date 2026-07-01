@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { AuthState, OpsHealth, OpsServices, OpsDisk, OpsAlerts, OpsBackups, OpsVersion, OpsDashboard } from '../types'
+import { bffRefresh } from '../api'
 
 interface Props {
   auth: AuthState
@@ -11,8 +12,18 @@ interface Slot<T> { data: T | null; err: string | null }
 
 async function opsFetch<T>(path: string): Promise<T> {
   const res = await fetch(path, { credentials: 'include' })
+  if (res.status === 401) {
+    await bffRefresh()
+    const retry = await fetch(path, { credentials: 'include' })
+    if (!retry.ok) throw new Error(`HTTP ${retry.status}`)
+    return retry.json()
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
+}
+
+function wait(ms: number) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
 }
 
 function Dot({ state }: { state: string }) {
@@ -68,9 +79,9 @@ function formatDuration(seconds: number | null | undefined) {
   const days = Math.floor(seconds / 86400)
   const hours = Math.floor((seconds % 86400) / 3600)
   const mins = Math.floor((seconds % 3600) / 60)
-  if (days > 0) return `${days}g ${hours}s`
-  if (hours > 0) return `${hours}s ${mins}d`
-  return `${Math.max(1, mins)}d`
+  if (days > 0) return `${days} gün ${hours} sa`
+  if (hours > 0) return `${hours} sa ${mins} dk`
+  return `${Math.max(1, mins)} dk`
 }
 
 export default function OpsConsole({ auth, onBack, onLogout }: Props) {
@@ -82,11 +93,18 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
   const [version,  setVersion]  = useState<Slot<OpsVersion>> ({ data: null, err: null })
   const [spinning, setSpinning] = useState(true)
   const [lastAt,   setLastAt]   = useState('')
+  const [banner,   setBanner]   = useState('')
 
   const refresh = useCallback(async () => {
     setSpinning(true)
     try {
-      const d = await opsFetch<OpsDashboard>('/ops/dashboard')
+      let d: OpsDashboard
+      try {
+        d = await opsFetch<OpsDashboard>('/ops/dashboard')
+      } catch {
+        await wait(800)
+        d = await opsFetch<OpsDashboard>('/ops/dashboard')
+      }
       setHealth({ data: d.health, err: null })
       setServices({ data: d.services, err: null })
       setDisk({ data: d.disk, err: null })
@@ -94,14 +112,16 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
       setBackups({ data: d.backups, err: null })
       setVersion({ data: d.version, err: null })
       setLastAt(new Date(d.timestamp).toLocaleTimeString('tr-TR'))
+      setBanner('')
     } catch {
       const err = 'Veri alınamadı'
-      setHealth({ data: null, err })
-      setServices({ data: null, err })
-      setDisk({ data: null, err })
-      setAlerts({ data: null, err })
-      setBackups({ data: null, err })
-      setVersion({ data: null, err })
+      setBanner('Son yenileme başarısız; mevcut veriler korunuyor.')
+      setHealth(prev => ({ data: prev.data, err: prev.data ? null : err }))
+      setServices(prev => ({ data: prev.data, err: prev.data ? null : err }))
+      setDisk(prev => ({ data: prev.data, err: prev.data ? null : err }))
+      setAlerts(prev => ({ data: prev.data, err: prev.data ? null : err }))
+      setBackups(prev => ({ data: prev.data, err: prev.data ? null : err }))
+      setVersion(prev => ({ data: prev.data, err: prev.data ? null : err }))
     } finally {
       setSpinning(false)
     }
@@ -171,6 +191,11 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
 
       {/* Grid */}
       <div className="flex-1 max-w-6xl mx-auto w-full px-4 py-6">
+        {banner && (
+          <div className="mb-4 rounded-lg border border-yellow-600/40 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+            {banner}
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
           {/* Servis Durumu */}

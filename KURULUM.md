@@ -293,6 +293,19 @@ Ek güvenli test paketi:
 bash tools/server-safe-test-suite.sh
 ```
 
+Kontrollü restart ve alert simülasyon testleri:
+
+```bash
+# Servis restart eder; integration/prod-like test ortamında bilinçli çalıştır
+bash tools/server-resilience-test.sh
+
+# Status dosyalarını geçici değiştirir, alert'i doğrular, çıkarken geri alır
+bash tools/server-alert-simulation-test.sh
+
+# Gateway security header/CSP smoke testi
+bash tools/server-security-headers-test.sh
+```
+
 `tools/server-smoke-test.sh` şu kısa kontrolleri yapar:
 
 - Gateway health

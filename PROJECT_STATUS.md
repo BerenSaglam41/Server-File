@@ -71,7 +71,7 @@ hardening olarak tut.**
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
 | NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | Mevcut minimum-prod modelde FileService runtime NFS'e yalnız allowlist üzerinden rw yazar; strict modelde publisher/ops süreci ayrıca tasarlanacak |
 | Disk kapasitesi izleme | **Tamamlandı (2026-07-01)** | **Kapandı** | `platform-disk-check.timer` saatlik çalışır; WARN=%80, CRIT=%90; `.disk-status` yazar; `setup-server.sh` raporlar; Docker build cache temizliği ile API sunucusu %77→%57'ye düşürüldü |
-| OpsApi V1 — Read-Only | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; rol hiyerarşisi: ops.read < ops.execute < ops.admin; auth matrix: no-token→401, hr001(ops rolü yok)→**404** (indistinguishability), opsadmin→200, opsuser01→200 ✅; port dışarı publish edilmemiş; Docker socket mount yok; servis durumu host snapshot dosyasından okunur; `ops.audit_events` PostgreSQL tablosu; X-Correlation-Id response header; `/ops/me`, `/ops/version`, `/ops/dashboard` hazır |
+| OpsApi V1 — Read-Only | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; rol hiyerarşisi: ops.read < ops.execute < ops.admin; auth matrix: no-token→401, hr001(ops rolü yok)→**404** (indistinguishability), opsadmin→200, opsuser01→200 ✅; port dışarı publish edilmemiş; Docker socket mount yok; servis durumu host snapshot dosyasından okunur; `ops.audit_events` PostgreSQL tablosu; X-Correlation-Id response header; `/ops/me`, `/ops/version`, `/ops/dashboard` hazır; logout sonrası `/ops/me`→401 doğrulandı |
 | OpsApi V2 — Write Ops | Tasarlandı, henüz yok | **Observability Faz 1 sonrası** | POST /ops/backups/trigger (ops.execute), POST /ops/restore (ops.admin zorunlu); host systemctl erişim yöntemi belirlenmeli |
 | Observability | Log + audit + health + Ops Dashboard V1 var; metrics/tracing/Grafana yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id/correlation standardı, structured logs, `/metrics`, Prometheus ve Grafana sıradaki faz |
 
@@ -80,9 +80,10 @@ hardening olarak tut.**
 1. ~~Backup/restore otomasyonunu systemd timer'a bağlamak.~~ **Tamamlandı (2026-07-01)**
 2. Secret rotasyonu ve prod env ayrımı.
 3. Gerçek domain + Let's Encrypt + public 443.
-4. Observability Faz 1: request id + structured logs + correlation standardı.
-5. Metrics + Prometheus + Grafana.
-6. Yük/izleme sonuçlarına göre strict NFS `ro export + publisher` tasarımı.
+4. Resilience test V1: Gateway/OpsApi/FileService/Keycloak/PostgreSQL restart senaryoları.
+5. Observability Faz 1: request id + structured logs + correlation standardı.
+6. Metrics + Prometheus + Grafana.
+7. Yük/izleme sonuçlarına göre strict NFS `ro export + publisher` tasarımı.
 
 Not: strict NFS `ro export + publisher` modeli mimari olarak daha katıdır ama mevcut iki sunuculu çalışan model için ilk canlıya çıkışın
 ön şartı değildir. İlk production adımı minimum profilde `rw` NFS'yi sadece API/FileService sunucusuna
@@ -224,6 +225,79 @@ Tespit edilen ve düzeltilen sorun:
 - Commit: `fix(restore-live): gateway restart after service stop/start`
 
 Sonuç: `tools/restore-live.sh` production-ready. NFS all_squash ortamında `rsync --no-o --no-g` + `pg_restore --clean --if-exists` + gateway restart zinciri doğrulandı.
+
+### 2026-07-01 deploy smoke + safe test doğrulaması
+
+`setup-server.sh`, `tools/server-smoke-test.sh` ve `tools/server-safe-test-suite.sh` FileAPI sunucusunda
+uçtan uca çalıştırıldı.
+
+Smoke test sonuçları:
+
+```text
+Gateway health                         -> 200
+HR login                               -> 200
+Personnel list                         -> 200 (29 kayıt)
+P001 files                             -> 200 (3 dosya)
+Download                               -> 200
+p001 -> P002 erişimi                   -> 403
+Ops login                              -> 200
+/ops/me no-token                       -> 401
+HR kullanıcısı /ops/dashboard          -> 404
+/ops/me, /ops/health, /ops/services    -> 200
+/ops/disk, /ops/backups, /ops/version  -> 200
+/ops/dashboard                         -> 200
+Ops logout sonrası /ops/me             -> 401
+```
+
+Safe test sonuçları:
+
+```text
+/ops/dashboard JSON bütünlüğü          -> OK
+X-Correlation-Id response header       -> OK
+En büyük P001 dosyası download         -> 3,816,264 bytes; metadata ile uyumlu
+20 eşzamanlı HR login                  -> OK
+Son 10 dk ops audit kayıt sayısı       -> 42
+```
+
+Sonuç: Temel auth, yetki izolasyonu, ops endpoint koruması, logout, correlation id, audit yazımı,
+download bütünlüğü ve eşzamanlı login davranışı doğrulandı. Kalan testler daha kontrollü resilience
+senaryolarıdır: servis restart, NFS kopma, disk %90 simülasyonu, backup/restore failure.
+
+Ek test otomasyonu hazırlandı:
+
+```text
+tools/server-safe-test-suite.sh
+  - opsuser01 read-only kontrolü: /ops/dashboard 200, execute/admin false
+  - BFF refresh endpoint kontrolü
+  - ops.audit_events denied kayıtları: no_token ve ops_role_missing
+
+tools/server-alert-simulation-test.sh
+  - WARN_PCT düşük verilerek disk warning alert doğrulaması
+  - .backup-status geçici failed yapılarak backup critical alert doğrulaması
+  - Çıkışta status dosyalarını geri yükler
+
+tools/server-resilience-test.sh
+  - opsapi, gateway, keycloak restart sonrası /health, login, personnel list ve /ops/dashboard toparlanma testi
+```
+
+Not: `restore-live.sh` hâlâ yalnız Break Glass / Manual Recovery aracıdır. UI/OpsApi üzerinden tetiklenmez;
+pre-restore backup + çift onay tamamlanmadan write ops kapsamına alınmayacak.
+
+### 2026-07-01 ops bilgi sızıntısı / hardening değerlendirmesi
+
+Ops ekranındaki ayrıntılar yalnız `ops.read` ve üstü rollerle döner; token yoksa 401, authenticated ama ops
+rolü yoksa 404 ile gizlenir. Docker socket OpsApi container'ına mount edilmez; servis/CPU/RAM bilgileri host
+tarafında üretilen snapshot dosyasından salt-okunur okunur.
+
+Ek hardening:
+- Gateway `server_tokens off` ve temel browser güvenlik header'ları ile çalışır.
+- Public `/health` minimum bilgi döndürür.
+- Ops health reason alanları exception/stack/connection string yerine kontrollü kodlar döndürür
+  (`health_unreachable`, `health_timeout`, `db_unreachable`).
+- HSTS gerçek domain + güvenilir sertifika sonrası açılacak; self-signed/IP test ortamında bilerek kapalı.
+- `tools/server-security-headers-test.sh` Gateway header/CSP smoke testi için eklendi.
+- Ops Console refresh hatasında mevcut veriyi silmez; 401 durumunda BFF refresh dener, kısa kesintide bir kez retry eder
+  ve eski veriyi koruyarak uyarı gösterir.
 
 ## Test ortamı
 
@@ -1737,8 +1811,11 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
   443 ve güvenilir sertifika zinciri tamamlanmalı.
 - **Observability Faz 1**: Request id/correlation standardı, structured logs ve temel metrics eklenmeli;
   sonra Prometheus/Grafana/tracing kurulmalı.
-- **Deploy/test otomasyonu**: `tools/server-smoke-test.sh` eklendi. Sonraki iyileştirme olarak branch
-  deploy helper (`git fetch && checkout && setup-server && smoke`) tek komuta indirilebilir.
+- **Deploy/test otomasyonu**: `tools/server-smoke-test.sh` ve `tools/server-safe-test-suite.sh` eklendi.
+  Sonraki iyileştirme olarak branch deploy helper (`git fetch && checkout && setup-server && smoke && safe-test`)
+  tek komuta indirilebilir.
+- **Resilience test V1**: Safe test geçiyor; sıradaki kontrollü testler Gateway/OpsApi/FileService/Keycloak/PostgreSQL
+  restart sonrası health, login, download ve ops dashboard toparlanma kontrolleri.
 - **Ops Dashboard V1 polish**: Read-only console artık `/ops/dashboard` üzerinden System Health, Services,
   Disk, Alerts, Backups ve Version metadata alır. Docker socket OpsApi'ye mount edilmez; servis listesi
   `tools/services-status.sh` tarafından yazılan status-file üzerinden okunur. Kalan polish: UI metriklerinin

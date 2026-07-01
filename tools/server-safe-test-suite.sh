@@ -14,6 +14,8 @@ HR_USER="${HR_USER:-hr001}"
 HR_PASS="${HR_PASS:-Demo1234!}"
 OPS_USER="${OPS_USER:-opsadmin}"
 OPS_PASS="${OPS_PASS:-ops123}"
+OPS_READ_USER="${OPS_READ_USER:-opsuser01}"
+OPS_READ_PASS="${OPS_READ_PASS:-ops456}"
 PERSONNEL_ID="${PERSONNEL_ID:-P001}"
 CONCURRENT_LOGINS="${CONCURRENT_LOGINS:-20}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
@@ -23,6 +25,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 HR_COOKIE="$WORK_DIR/hr.cookies"
 OPS_COOKIE="$WORK_DIR/ops.cookies"
+OPS_READ_COOKIE="$WORK_DIR/ops-read.cookies"
 
 log() { printf '[..] %s\n' "$*"; }
 ok() { printf '[OK] %s\n' "$*"; }
@@ -73,6 +76,14 @@ echo "Base URL: $BASE_URL"
 log "Temel kullanıcılarla login"
 login "$HR_USER" "$HR_PASS" "$HR_COOKIE" "hr"
 login "$OPS_USER" "$OPS_PASS" "$OPS_COOKIE" "ops"
+login "$OPS_READ_USER" "$OPS_READ_PASS" "$OPS_READ_COOKIE" "ops-read"
+
+log "Refresh endpoint kontrolü"
+status="$(curl -k -sS -o "$WORK_DIR/hr-refresh.body" -w '%{http_code}' \
+  -b "$HR_COOKIE" \
+  -c "$HR_COOKIE" \
+  -X POST "$BASE_URL/api/auth/refresh")"
+expect_status "200" "$status" "HR refresh" "$WORK_DIR/hr-refresh.body"
 
 log "Ops dashboard JSON bütünlüğü kontrol ediliyor"
 status="$(curl -k -sS -D "$WORK_DIR/dashboard.headers" -o "$WORK_DIR/dashboard.json" -w '%{http_code}' \
@@ -123,6 +134,37 @@ if backups.get("retention_limit", 0) < 1:
 print("dashboard_json_ok")
 PY
 ok "Ops dashboard JSON alanları tutarlı"
+
+log "Ops read-only kullanıcı yetkileri kontrol ediliyor"
+status="$(curl -k -sS -o "$WORK_DIR/ops-read-me.json" -w '%{http_code}' \
+  -b "$OPS_READ_COOKIE" \
+  "$BASE_URL/ops/me")"
+expect_status "200" "$status" "opsuser01 /ops/me" "$WORK_DIR/ops-read-me.json"
+
+python3 - "$WORK_DIR/ops-read-me.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+permissions = data.get("permissions", {})
+if permissions.get("read") is not True:
+    raise SystemExit("opsuser01 read permission false")
+if permissions.get("execute") is not False:
+    raise SystemExit("opsuser01 execute permission must be false")
+if permissions.get("admin") is not False:
+    raise SystemExit("opsuser01 admin permission must be false")
+roles = set(data.get("roles", []))
+if "ops.read" not in roles or "ops.admin" in roles or "ops.execute" in roles:
+    raise SystemExit(f"unexpected opsuser01 roles: {roles}")
+print("ops_read_only_ok")
+PY
+ok "opsuser01 yalnız read yetkisine sahip"
+
+status="$(curl -k -sS -o "$WORK_DIR/ops-read-dashboard.body" -w '%{http_code}' \
+  -b "$OPS_READ_COOKIE" \
+  "$BASE_URL/ops/dashboard")"
+expect_status "200" "$status" "opsuser01 /ops/dashboard" "$WORK_DIR/ops-read-dashboard.body"
 
 log "Correlation header kontrolü"
 correlation_id="$(awk 'BEGIN{IGNORECASE=1} /^X-Correlation-Id:/ {gsub(/\r/,"",$2); print $2}' "$WORK_DIR/dashboard.headers" | tail -n 1)"
@@ -205,6 +247,13 @@ if [ -n "$postgres_container" ]; then
     fail "Son 10 dakikada ops audit kaydı yok"
   fi
   ok "Ops audit son 10 dakika kayıt sayısı: $count"
+
+  denied_counts="$(docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U platform -d platformdb -tAc \
+    "select reason_code || '=' || count(*) from ops.audit_events where created_at > now() - interval '15 minutes' and result='denied' and reason_code in ('no_token','ops_role_missing') group by reason_code order by reason_code;" | tr -d '[:space:]')"
+  printf '%s\n' "$denied_counts" > "$WORK_DIR/denied-counts.txt"
+  grep -q 'no_token=' "$WORK_DIR/denied-counts.txt" || fail "ops audit içinde no_token denied kaydı yok"
+  grep -q 'ops_role_missing=' "$WORK_DIR/denied-counts.txt" || fail "ops audit içinde ops_role_missing denied kaydı yok"
+  ok "Ops denied audit kayıtları var: $(tr '\n' ' ' < "$WORK_DIR/denied-counts.txt")"
 else
   printf '[UYARI] docker compose postgres bulunamadı; ops audit DB kontrolü skip edildi.\n'
 fi

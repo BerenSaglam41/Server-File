@@ -91,7 +91,7 @@ public static class OpsEndpoints
             catch (Exception ex)
             {
                 sw.Stop();
-                Add(name, "unhealthy", null, ex.Message[..Math.Min(ex.Message.Length, 80)]);
+                Add(name, "unhealthy", null, ex is TaskCanceledException ? "health_timeout" : "health_unreachable");
             }
         }
 
@@ -114,7 +114,7 @@ public static class OpsEndpoints
             {
                 sw.Stop();
                 var dockerStatus = IsContainerRunning(containers, "gateway") ? "degraded" : "unhealthy";
-                Add("gateway", dockerStatus, null, ex.Message[..Math.Min(ex.Message.Length, 80)]);
+                Add("gateway", dockerStatus, null, ex is TaskCanceledException ? "health_timeout" : "health_unreachable");
             }
         }
 
@@ -133,7 +133,7 @@ public static class OpsEndpoints
             catch (Exception ex)
             {
                 sw.Stop();
-                Add("postgres", "unhealthy", null, ex.Message[..Math.Min(ex.Message.Length, 80)]);
+                Add("postgres", "unhealthy", null, ex is TimeoutException ? "db_timeout" : "db_unreachable");
             }
         }
     }
