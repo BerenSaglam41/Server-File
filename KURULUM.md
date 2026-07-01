@@ -7,7 +7,8 @@ Sistemde iki ayrı sunucu var:
 | **files-01** | 192.168.64.3 | NFS depolama — `/srv/files` export eder |
 | **API sunucusu** | 192.168.64.5 | Docker Compose — tüm servisler burada çalışır |
 
-**Kurulum sırası:** files-01 → Mac veya API sunucusu (her ikisi de files-01'e bağlanır)
+**Kurulum sırası:** files-01 → API sunucusu. Mac yalnız UTM/test profilinde files-01'e bağlanır;
+production minimum profilinde Mac/başka makine NFS mount edememelidir.
 
 ---
 
@@ -99,7 +100,7 @@ sudo mount -t nfs -o resvport <FILES_01_IP>:/srv/files /tmp/files01-test
 
 ## 2. Mac Kurulumu
 
-Mac, files-01'i `/Volumes/platform-files`'a mount eder.
+Mac, yalnız UTM/test profilinde files-01'i `/Volumes/platform-files`'a mount eder.
 
 > Bu bölüm test/UTM içindir. Production minimum modunda Mac, Files-01'i mount edememelidir;
 > dosya erişimi yalnız Gateway → Uygulama API → FileService akışından yapılır.
@@ -181,11 +182,16 @@ cd ~/Server-File
 
 **2. Kurulum scriptini çalıştır**
 ```bash
+# Production minimum varsayılan: Files-01'in '*' export olmadığını kontrol eder
 bash setup-server.sh
+
+# UTM/test kolaylığı gerekiyorsa:
+# NFS_MODE=test bash setup-server.sh
 ```
 
 Bu script otomatik olarak şunları yapar:
 - `.env` dosyasını `.env.linux`'tan oluşturur → `STORAGE_PATH=/mnt/platform-files`
+- `NFS_MODE=production` ise Files-01'in `/srv/files *` olarak açık olmadığını kontrol eder
 - files-01'i `/mnt/platform-files`'a mount eder + `/etc/fstab`'a ekler
 - `.key` sertifika dosyaları eksikse `generate-certs.sh` çalıştırır
 - `docker compose up --build -d`
@@ -204,7 +210,9 @@ Dışarıdan: `https://192.168.64.5:5090` (self-signed) veya `https://domain:509
 ### Güncelleme
 
 ```bash
-cd ~/Server-File && git pull && bash setup-server.sh
+cd ~/Server-File
+git pull
+bash setup-server.sh
 ```
 
 ---

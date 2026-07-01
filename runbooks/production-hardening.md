@@ -87,6 +87,38 @@ sudo mount -t nfs -o resvport <FILES_01_IP>:/srv/files /tmp/files01-test
 # Beklenen: access denied veya timeout
 ```
 
+### 2026-07-01 canlı doğrulama sonucu
+
+Files-01 production minimum profile alındı:
+
+```text
+/etc/exports:
+/srv/files 192.168.64.5(rw,sync,no_subtree_check,root_squash)
+
+exportfs -v:
+/srv/files 192.168.64.5(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,root_squash,no_all_squash)
+
+ufw:
+Default: deny (incoming)
+2049/tcp ALLOW IN 192.168.64.5
+```
+
+API sunucusu doğrulaması:
+
+```text
+nc -vz 192.168.64.3 2049 -> succeeded
+mount -> 192.168.64.3:/srv/files on /mnt/platform-files type nfs4 ... clientaddr=192.168.64.5
+ls /mnt/platform-files/export/.probe -> OK
+```
+
+Mac/izinsiz makine doğrulaması:
+
+```text
+nc -vz -G 3 192.168.64.3 2049 -> Operation timed out
+```
+
+Sonuç: `*` export kapandı, NFS TCP/2049 yalnız API/FileService sunucusuna açık.
+
 ## 2. Katı Production Modeli
 
 En katı modelde FileService runtime host'u export'u read-only görür. Yazma/publish işi ayrı bir kontrollü publisher sürecine taşınır.
@@ -181,6 +213,42 @@ STORAGE_ROOT=/mnt/platform-files \
 BACKUP_ROOT=/backup/platform-files \
 tools/restore-test.sh
 ```
+
+Canlı doğrulama sırası API/FileService sunucusunda çalıştırılır:
+
+```bash
+cd ~/Server-File
+git pull
+bash setup-server.sh
+
+docker compose ps
+mount | grep platform-files
+ls /mnt/platform-files/export/.probe
+
+sudo mkdir -p /backup/platform-files
+sudo chown -R "$USER:$USER" /backup/platform-files
+
+STORAGE_ROOT=/mnt/platform-files \
+BACKUP_ROOT=/backup/platform-files \
+./tools/backup-files01.sh
+
+ls -lh /backup/platform-files/*/platformdb.dump
+ls -lh /backup/platform-files/*/export.sha256
+
+STORAGE_ROOT=/mnt/platform-files \
+BACKUP_ROOT=/backup/platform-files \
+./tools/restore-test.sh
+
+find /mnt/platform-files/restore-tests -maxdepth 3 -type f | tail
+```
+
+Kabul:
+
+- Backup klasöründe `export/`, `manifests/`, `export.sha256`, `platformdb.dump`, `backup-info.txt` oluşur.
+- `platformdb.dump` boş değildir.
+- Restore testi canlı `export/` alanına yazmaz; yalnız `restore-tests/<timestamp>/export` altını kullanır.
+- Hash doğrulama `OK` döner.
+- `SKIP_DB_DUMP=1` production doğrulamada kullanılmaz.
 
 Restore testi canlı `export/` alanına geri yazmaz; yedeği `restore-tests/<timestamp>/export` altına açar ve `export.sha256` manifestini doğrular.
 

@@ -65,7 +65,7 @@ hardening olarak tut.**
 
 | Başlık | Mevcut durum | Karar | Kapanış kanıtı |
 |---|---|---|---|
-| Firewall + NFS allowlist | Runbook var; test profili `*` export'u açıklanmış, prod minimum allowlist yazılmış | **Canlıya çıkmadan önce zorunlu** | `exportfs -v` çıktısında `*` yok; TCP/2049 yalnız API/FileService hostundan erişiliyor |
+| Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı |
 | Secret rotasyonu | Demo secret'lar compose/realm içinde duruyor | **Canlıya çıkmadan önce zorunlu** | Prod deploy gerçek secret'ları env/secret store'dan alıyor; demo kullanıcı/parola prod realm'de yok |
 | Backup/restore otomasyonu | Scriptler var; dry restore testi yapıldı | **Canlıya çıkmadan önce otomasyona alınmalı** | Günlük backup timer çalışıyor; haftalık restore testi hash doğruluyor; sonuçlar log/alert'e bağlı |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
@@ -74,13 +74,12 @@ hardening olarak tut.**
 
 Önerilen sıra:
 
-1. Firewall + NFS allowlist.
-2. Secret rotasyonu ve prod env ayrımı.
-3. Backup/restore otomasyonu.
-4. Gerçek domain + Let's Encrypt + public 443.
-5. Observability Faz 1: request id + structured logs + correlation standardı.
-6. Metrics + Prometheus + Grafana.
-7. Yük/izleme sonuçlarına göre strict NFS `ro export + publisher` tasarımı.
+1. Secret rotasyonu ve prod env ayrımı.
+2. Backup/restore otomasyonu.
+3. Gerçek domain + Let's Encrypt + public 443.
+4. Observability Faz 1: request id + structured logs + correlation standardı.
+5. Metrics + Prometheus + Grafana.
+6. Yük/izleme sonuçlarına göre strict NFS `ro export + publisher` tasarımı.
 
 Not: strict NFS `ro export + publisher` modeli mimari olarak daha katıdır ama mevcut iki sunuculu çalışan model için ilk canlıya çıkışın
 ön şartı değildir. İlk production adımı minimum profilde `rw` NFS'yi sadece API/FileService sunucusuna
@@ -89,6 +88,37 @@ daraltmak olmalıdır.
 Observability detayı: `runbooks/observability-plan.md`. İlk teknik adım olarak doğrudan Grafana'dan
 başlamak yerine request id/correlation/structured log standardı uygulanmalıdır; Prometheus, Grafana ve
 distributed tracing bunun üstüne kurulmalıdır.
+
+### 2026-07-01 Files-01 NFS allowlist doğrulaması
+
+Minimum production NFS modeli canlı Files-01 üzerinde uygulandı. Mevcut upload/download/archive akışı
+bozulmasın diye strict `ro export + publisher` modeline geçilmedi; `rw` yalnız API/FileService sunucusuna
+daraltıldı.
+
+Kanıtlar:
+
+```text
+Files-01 /etc/exports:
+/srv/files 192.168.64.5(rw,sync,no_subtree_check,root_squash)
+
+Files-01 exportfs -v:
+/srv/files 192.168.64.5(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,root_squash,no_all_squash)
+
+Files-01 ufw:
+Default: deny (incoming)
+2049/tcp ALLOW IN 192.168.64.5
+
+API sunucusu:
+nc -vz 192.168.64.3 2049 -> succeeded
+mount -> 192.168.64.3:/srv/files on /mnt/platform-files type nfs4 ... clientaddr=192.168.64.5
+ls /mnt/platform-files/export/.probe -> OK
+
+Mac / izinsiz makine:
+nc -vz -G 3 192.168.64.3 2049 -> Operation timed out
+```
+
+Sonuç: Files-01 artık ağdaki herkese açık NFS storage değildir; yalnız API/FileService sunucusu mount
+edebilir. Client/Mac/başka VM dosya katmanını bypass edemez.
 
 ## Test ortamı
 
@@ -161,7 +191,8 @@ dosya-sistemi-projesi/
 
 **API sunucusunda (192.168.64.5):**
 ```bash
-git pull && bash setup-server.sh
+git pull
+bash setup-server.sh
 ```
 Tarayıcı: `http://192.168.64.5:5090/`
 
@@ -404,7 +435,9 @@ Client ─(user JWT)──▶ Gateway ──▶ YonetimApi ─(service JWT + cli
 
 ## Files-01 NFS Entegrasyonu (TAMAMLANDI ✅)
 
-files-01 (192.168.64.3), NFS sunucusu olarak yapılandırıldı. Mac ve API sunucusu aynı files-01'e bağlanır.
+files-01 (192.168.64.3), NFS sunucusu olarak yapılandırıldı. Production minimum profilde
+yalnız API/FileService sunucusu files-01'e bağlanır; Mac/başka makineler NFS mount edemez.
+UTM/test profilinde Mac mount kolaylığı bilinçli olarak açılabilir.
 
 **Topoloji:**
 - **files-01** (192.168.64.3): NFS sunucusu — `/srv/files` export eder
@@ -542,7 +575,8 @@ Test: H1 (normal → 200) ✅, H2 (storage down → 503) ✅, H3 (restore → 20
 | `FileStorage:StagingPath` | `/app/storage/staging` | `/app/storage/staging` |
 | `FileStorage:ExportPath` | `/app/storage/export` | `/app/storage/export` |
 
-Container `/app/storage` → Mac'te `/Volumes/platform-files`, API sunucusunda `/mnt/platform-files` → her ikisi NFS → files-01 `/srv/files`
+Production minimumda container `/app/storage` → API sunucusunda `/mnt/platform-files` → NFS → files-01 `/srv/files`.
+UTM/test profilinde Mac `/Volumes/platform-files` ile aynı export'u mount edebilir.
 
 **Dizin yapısı** (`files01-nfs-model.md` ile birebir uyumlu):
 ```
@@ -1384,7 +1418,8 @@ Mac Docker'da YonetimApi `keycloak:8080`'i çağırdığında token `iss=keycloa
 
 ## Çoklu Ortam Kurulumu (TAMAMLANDI ✅ — 2026-06-30)
 
-Sistem hem Mac'te hem API sunucusunda (192.168.64.5) çalışacak şekilde yapılandırıldı. Her iki ortam da aynı files-01 NFS sunucusuna bağlanır.
+Sistem production minimum profilde API sunucusunda (192.168.64.5) çalışacak şekilde yapılandırıldı.
+Mac yalnız tarayıcı olarak kullanılır; Files-01 NFS export'una doğrudan bağlanamaz.
 
 ### Topoloji
 
@@ -1423,23 +1458,29 @@ React SPA artık Docker container içinde çalışıyor:
 
 ### setup-server.sh Otomasyonu
 
-`bash setup-server.sh` komutu git pull sonrasında şunları yapar:
+`setup-server.sh` komutu git pull sonrasında şunları yapar. Production minimum artık varsayılandır;
+UTM/test kolaylığı gerekiyorsa bilinçli olarak `NFS_MODE=test bash setup-server.sh` kullanılmalıdır.
 
 1. `.env` yoksa `.env.linux`'tan kopyalar
-2. NFS mount yoksa `192.168.64.3:/srv/files → /mnt/platform-files` mount eder + `/etc/fstab`'a ekler
-3. `certs/*.key` dosyaları eksikse/klasörse `generate-certs.sh` çalıştırır
-4. `docker compose up --build -d`
-5. `docker compose restart fileservice` (NFS mount sırası için)
-6. DB tablolar yoksa `01-schema.sql` + `02-seed.sql` çalıştırır
+2. Production modda Files-01'in `/srv/files *` olarak açık olmadığını kontrol eder
+3. NFS mount yoksa `192.168.64.3:/srv/files → /mnt/platform-files` mount eder + `/etc/fstab`'a ekler
+4. `certs/*.key` dosyaları eksikse/klasörse `generate-certs.sh` çalıştırır
+5. `docker compose up --build -d`
+6. `docker compose restart fileservice` (NFS mount sırası için)
+7. DB tablolar yoksa `01-schema.sql` + `02-seed.sql` çalıştırır
 
 ### Linux Sunucusu İlk Kurulum
 
 ```bash
-# Bir kere:
+# Production minimum:
 bash setup-server.sh
 
+# UTM/test:
+# NFS_MODE=test bash setup-server.sh
+
 # Kod güncellemesi:
-git pull && bash setup-server.sh
+git pull
+bash setup-server.sh
 
 # Ya da sadece container rebuild:
 docker compose up --build -d

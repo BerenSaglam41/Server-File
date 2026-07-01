@@ -16,6 +16,15 @@ DEST="$BACKUP_ROOT/$STAMP"
 EXPORT_DIR="$STORAGE_ROOT/export"
 MANIFESTS_DIR="$STORAGE_ROOT/manifests"
 
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256_CMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256_CMD="shasum -a 256"
+else
+  echo "[ERROR] sha256sum veya shasum bulunamadı" >&2
+  exit 1
+fi
+
 if [ ! -d "$EXPORT_DIR" ]; then
   echo "[ERROR] export directory not found: $EXPORT_DIR" >&2
   exit 1
@@ -37,7 +46,7 @@ fi
 echo "[..] Writing file manifest"
 (
   cd "$DEST/export"
-  find . -type f -print0 | sort -z | xargs -0 shasum -a 256
+  find . -type f -print0 | sort -z | xargs -0 $SHA256_CMD
 ) > "$DEST/export.sha256"
 
 if [ "$SKIP_DB_DUMP" = "1" ]; then
@@ -48,6 +57,7 @@ else
     pg_dump -U platform -d platformdb --format=custom --file=/tmp/platformdb.dump
   docker compose -f "$COMPOSE_FILE" cp postgres:/tmp/platformdb.dump "$DEST/platformdb.dump" >/dev/null
   docker compose -f "$COMPOSE_FILE" exec -T postgres rm -f /tmp/platformdb.dump
+  test -s "$DEST/platformdb.dump"
 fi
 
 cat > "$DEST/backup-info.txt" <<EOF

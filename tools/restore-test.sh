@@ -11,6 +11,15 @@ BACKUP_ROOT="${BACKUP_ROOT:-$ROOT_DIR/backups}"
 BACKUP_DIR="${1:-}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256_CHECK_CMD="sha256sum -c"
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256_CHECK_CMD="shasum -a 256 -c"
+else
+  echo "[ERROR] sha256sum veya shasum bulunamadı" >&2
+  exit 1
+fi
+
 if [ -z "$BACKUP_DIR" ]; then
   BACKUP_DIR="$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 fi
@@ -37,7 +46,7 @@ rsync -a --delete "$BACKUP_DIR/export/" "$RESTORE_EXPORT/"
 echo "[..] Verifying SHA256 manifest"
 (
   cd "$RESTORE_EXPORT"
-  shasum -a 256 -c "$BACKUP_DIR/export.sha256"
+  $SHA256_CHECK_CMD "$BACKUP_DIR/export.sha256"
 )
 
 cat > "$RESTORE_ROOT/restore-test-info.txt" <<EOF
