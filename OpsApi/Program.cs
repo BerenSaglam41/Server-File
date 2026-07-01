@@ -50,13 +50,11 @@ builder.Services.AddAuthorization(options =>
 
 var app = builder.Build();
 
-app.UseAuthentication();
-app.UseAuthorization();
-
 // ── Ops Audit Middleware ─────────────────────────────────────────────────────
-// Tüm /ops/* isteklerini loglar — yonetim.audit_events'tan tamamen bağımsız.
-// Dosya: /ops/audit/ops-audit.jsonl (host: /var/log/platform-ops/ops-audit.jsonl)
-// STATUS_ROOT (:ro) ile karıştırılmaz — audit için ayrı writable mount.
+// UseAuthentication/UseAuthorization'dan ÖNCE konumlanmalı:
+// Authorization 403/401 döndüğünde short-circuit yapar ve sonraki
+// middleware'leri çağırmaz. Burada olunca pipeline'ı tamamen sararız,
+// 200/401/403 dahil tüm /ops/* istekleri loglanır.
 var auditRoot = builder.Configuration["AUDIT_ROOT"] ?? "/ops/audit";
 Directory.CreateDirectory(auditRoot);
 app.Use(async (ctx, next) =>
@@ -84,6 +82,9 @@ app.Use(async (ctx, next) =>
     catch { /* audit yazılamazsa istek kesilmesin */ }
 });
 // ─────────────────────────────────────────────────────────────────────────────
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "OpsApi" }));
 app.MapOpsEndpoints();
