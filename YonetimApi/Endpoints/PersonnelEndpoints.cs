@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Npgsql;
 using YonetimApi.Services;
@@ -220,12 +221,12 @@ public static class PersonnelEndpoints
         var client = httpClientFactory.CreateClient("FileService");
 
         if (!request.HasFormContentType)
-            return Results.BadRequest(new { error = "multipart/form-data bekleniyor" });
+            return Results.BadRequest(new { error = "invalid_content_type" });
 
         var form = await request.ReadFormAsync();
         var file = form.Files.GetFile("file");
         if (file is null || file.Length == 0)
-            return Results.BadRequest(new { error = "dosya bulunamadi" });
+            return Results.BadRequest(new { error = "file_missing" });
 
         var classification = form["classification"].FirstOrDefault() ?? "internal";
         var serviceToken = await tokenService.GetServiceTokenAsync();
@@ -254,7 +255,9 @@ public static class PersonnelEndpoints
         var body = await response.Content.ReadAsStringAsync();
 
         await audit.WriteAsync(personnelId, actor, DomainAction(relationType, "Uploaded"),
-            response.IsSuccessStatusCode ? "success" : "error", null, correlationId);
+            response.IsSuccessStatusCode ? "success" : "error",
+            response.IsSuccessStatusCode ? null : ParseErrorCode(body),
+            correlationId);
 
         return Results.Content(body, "application/json", Encoding.UTF8, (int)response.StatusCode);
     }
@@ -299,7 +302,9 @@ public static class PersonnelEndpoints
         var archiveBody = await archiveResp.Content.ReadAsStringAsync();
 
         await audit.WriteAsync(personnelId, actor, DomainAction(relationType, "Archived"),
-            archiveResp.IsSuccessStatusCode ? "success" : "error", null, correlationId);
+            archiveResp.IsSuccessStatusCode ? "success" : "error",
+            archiveResp.IsSuccessStatusCode ? null : ParseErrorCode(archiveBody),
+            correlationId);
 
         return Results.Content(archiveBody, "application/json", Encoding.UTF8, (int)archiveResp.StatusCode);
     }
@@ -334,7 +339,9 @@ public static class PersonnelEndpoints
         var body = await response.Content.ReadAsStringAsync();
 
         await audit.WriteAsync(personnelId, actor, "PersonnelFilesListed",
-            response.IsSuccessStatusCode ? "success" : "error", null, correlationId);
+            response.IsSuccessStatusCode ? "success" : "error",
+            response.IsSuccessStatusCode ? null : ParseErrorCode(body),
+            correlationId);
 
         return Results.Content(body, "application/json", Encoding.UTF8, (int)response.StatusCode);
     }
@@ -605,4 +612,16 @@ public static class PersonnelEndpoints
 
     private record OwnershipResult(
         [property: JsonPropertyName("owned")] bool Owned);
+
+    private static string? ParseErrorCode(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var e))
+                return e.GetString();
+        }
+        catch { }
+        return null;
+    }
 }
