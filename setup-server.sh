@@ -93,12 +93,26 @@ echo "[OK] Storage erişilebilir (probe dosyası var)"
 CERTS_NEED_REGEN=0
 CERT_BACKUP_DIR="certs/backup-mismatch-$(date +%Y%m%d%H%M%S)"
 
+backup_cert_file() {
+    local path="$1"
+    mkdir -p "$CERT_BACKUP_DIR"
+    [ -e "$path" ] && mv "$path" "$CERT_BACKUP_DIR/$(basename "$path")" || true
+}
+
 backup_cert_pair() {
     local name="$1"
-    mkdir -p "$CERT_BACKUP_DIR"
-    [ -e "certs/$name.crt" ] && mv "certs/$name.crt" "$CERT_BACKUP_DIR/$name.crt" || true
-    [ -e "certs/$name.key" ] && mv "certs/$name.key" "$CERT_BACKUP_DIR/$name.key" || true
+    backup_cert_file "certs/$name.crt"
+    backup_cert_file "certs/$name.key"
     echo "[..] certs/$name.crt/key yedeğe alındı: $CERT_BACKUP_DIR"
+}
+
+backup_all_certs() {
+    for name in ca fileservice gateway yonetimapi filoapi; do
+        backup_cert_file "certs/$name.crt"
+        backup_cert_file "certs/$name.key"
+    done
+    backup_cert_file "certs/ca.srl"
+    echo "[..] Tüm sertifika zinciri yedeğe alındı: $CERT_BACKUP_DIR"
 }
 
 cert_key_match() {
@@ -114,6 +128,15 @@ cert_key_match() {
 
     [ -n "$cert_mod" ] && [ "$cert_mod" = "$key_mod" ]
 }
+
+if [ ! -f "certs/ca.crt" ] || [ ! -f "certs/ca.key" ]; then
+    echo "[..] certs/ca.crt/key eksik, sertifika üretimi gerekli"
+    CERTS_NEED_REGEN=1
+elif ! cert_key_match "ca"; then
+    echo "[UYARI] certs/ca.crt ve certs/ca.key eşleşmiyor; tüm sertifika zinciri yeniden üretilecek"
+    backup_all_certs
+    CERTS_NEED_REGEN=1
+fi
 
 for CERT_NAME in fileservice gateway yonetimapi filoapi; do
     if [ ! -f "certs/$CERT_NAME.crt" ] || [ ! -f "certs/$CERT_NAME.key" ]; then
