@@ -55,8 +55,10 @@ app.UseAuthorization();
 
 // ── Ops Audit Middleware ─────────────────────────────────────────────────────
 // Tüm /ops/* isteklerini loglar — yonetim.audit_events'tan tamamen bağımsız.
-// Dosya: /ops/status-files/ops-audit.jsonl (bir satır = bir istek)
-var statusRoot = builder.Configuration["STATUS_ROOT"] ?? "/ops/status-files";
+// Dosya: /ops/audit/ops-audit.jsonl (host: /var/log/platform-ops/ops-audit.jsonl)
+// STATUS_ROOT (:ro) ile karıştırılmaz — audit için ayrı writable mount.
+var auditRoot = builder.Configuration["AUDIT_ROOT"] ?? "/ops/audit";
+Directory.CreateDirectory(auditRoot);
 app.Use(async (ctx, next) =>
 {
     await next();
@@ -76,7 +78,7 @@ app.Use(async (ctx, next) =>
     try
     {
         var line = JsonSerializer.Serialize(entry) + "\n";
-        var auditFile = Path.Combine(statusRoot, "ops-audit.jsonl");
+        var auditFile = Path.Combine(auditRoot, "ops-audit.jsonl");
         await File.AppendAllTextAsync(auditFile, line);
     }
     catch { /* audit yazılamazsa istek kesilmesin */ }

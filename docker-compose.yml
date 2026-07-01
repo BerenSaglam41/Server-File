@@ -146,9 +146,11 @@ services:
       Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
       Keycloak__RequireHttpsMetadata: "false"
       STATUS_ROOT: "/ops/status-files"
+      AUDIT_ROOT: "/ops/audit"
     volumes:
       - /backup/platform-files:/ops/status-files:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/platform-ops:/ops/audit
     depends_on:
       keycloak:
         condition: service_healthy
