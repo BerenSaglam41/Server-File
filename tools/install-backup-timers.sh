@@ -49,6 +49,8 @@ for script in tools/backup-files01.sh tools/restore-test.sh; do
 done
 
 mkdir -p "$BACKUP_ROOT"
+# Status dosyaları için group-writable — manuel çalıştırmada da yazılabilsin
+chmod 775 "$BACKUP_ROOT"
 
 # --- platform-backup.service ---
 # ExecStartPost: backup başarılı olursa restore-test otomatik koşar.

@@ -14,7 +14,7 @@ STATUS_FILE="$BACKUP_ROOT/.restore-status"
 
 # Status dosyasını EXIT trap ile yaz
 _restore_result=failed
-trap 'printf "status=%s\ntimestamp=%s\n" "$_restore_result" "$STAMP" > "$STATUS_FILE"' EXIT
+trap 'printf "status=%s\ntimestamp=%s\n" "$_restore_result" "$STAMP" > "$STATUS_FILE" 2>/dev/null || true' EXIT
 
 if command -v sha256sum >/dev/null 2>&1; then
   SHA256_CHECK_CMD="sha256sum -c"
