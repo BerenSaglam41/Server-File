@@ -106,7 +106,7 @@ public static class AuthEndpoints
         HttpOnly = true,
         Secure   = secure,
         SameSite = SameSiteMode.Strict,
-        Path     = "/api",
+        Path     = "/",
         MaxAge   = maxAge,
     };
 
@@ -120,9 +120,12 @@ public static class AuthEndpoints
 
     private static void ClearCookies(HttpResponse response, bool secure)
     {
-        var gone = new CookieOptions { Path = "/api", MaxAge = TimeSpan.Zero, Secure = secure };
-        response.Cookies.Delete("at", gone);
-        response.Cookies.Delete("rt", gone);
+        foreach (var path in new[] { "/", "/api" })
+        {
+            var gone = new CookieOptions { Path = path, MaxAge = TimeSpan.Zero, Secure = secure };
+            response.Cookies.Delete("at", gone);
+            response.Cookies.Delete("rt", gone);
+        }
     }
 
     private static JwtPayload DecodeJwtPayload(string token)
