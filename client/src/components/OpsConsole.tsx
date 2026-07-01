@@ -341,7 +341,7 @@ export default function OpsConsole({ auth, onBack, onLogout }: Props) {
                       <th className="text-right pb-2 font-medium pr-4">CPU</th>
                       <th className="text-right pb-2 font-medium pr-4">RAM</th>
                       <th className="text-right pb-2 font-medium pr-4">Restart</th>
-                      <th className="text-right pb-2 font-medium">Age</th>
+                      <th className="text-right pb-2 font-medium">Uptime</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700/40">

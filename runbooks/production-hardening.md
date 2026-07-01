@@ -336,6 +336,9 @@ Script şu işlemleri yapar:
 - Eski backup temizleme: `BACKUP_RETAIN=14` (son 14 backup tutulur)
 - `systemctl enable --now` ile timer'lar hemen devreye girer
 
+Not: Backup snapshot ve services snapshot farklıdır. Backup timer kalıcı veri yedeği üretir;
+services-status timer yalnız Ops ekranındaki container durum/CPU/RAM/restart/age ölçüm dosyasını yeniler.
+
 Env override örnekleri:
 
 ```bash

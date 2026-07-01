@@ -67,11 +67,11 @@ hardening olarak tut.**
 |---|---|---|---|
 | Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı; FileService container staging→export probe geçti |
 | Secret rotasyonu | Demo secret'lar compose/realm içinde duruyor | **Canlıya çıkmadan önce zorunlu** | Prod deploy gerçek secret'ları env/secret store'dan alıyor; demo kullanıcı/parola prod realm'de yok |
-| Backup/restore otomasyonu | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | `platform-backup.timer` (günlük 02:00 UTC) + günlük backup sonrası restore doğrulaması + `platform-restore-test.timer` (haftalık Pazar 03:00 UTC) aktif; `tools/restore-live.sh` uçtan uca test edildi ama yalnız Break Glass / Manual Recovery prosedürü |
+| Backup/restore otomasyonu | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | `platform-backup.timer` günde 1 backup alır (02:00 UTC + randomized delay); başarılı backup sonrası restore doğrulaması çalışır; `platform-restore-test.timer` haftalık Pazar 03:00 UTC aktif; Ops UI “Son yedek” değerini gerçek en yeni backup klasöründen gösterir; `tools/restore-live.sh` uçtan uca test edildi ama yalnız Break Glass / Manual Recovery prosedürü |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
 | NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | Mevcut minimum-prod modelde FileService runtime NFS'e yalnız allowlist üzerinden rw yazar; strict modelde publisher/ops süreci ayrıca tasarlanacak |
 | Disk kapasitesi izleme | **Tamamlandı (2026-07-01)** | **Kapandı** | `platform-disk-check.timer` saatlik çalışır; WARN=%80, CRIT=%90; `.disk-status` yazar; `setup-server.sh` raporlar; Docker build cache temizliği ile API sunucusu %77→%57'ye düşürüldü |
-| OpsApi V1 — Read-Only | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; rol hiyerarşisi: ops.read < ops.execute < ops.admin; auth matrix: no-token→401, hr001(ops rolü yok)→**404** (indistinguishability), opsadmin→200, opsuser01→200 ✅; port dışarı publish edilmemiş; Docker socket mount yok; servis durumu host snapshot dosyasından okunur; `ops.audit_events` PostgreSQL tablosu; X-Correlation-Id response header; `/ops/me`, `/ops/version`, `/ops/dashboard` hazır; logout sonrası `/ops/me`→401 doğrulandı |
+| OpsApi V1 — Read-Only | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; rol hiyerarşisi: ops.read < ops.execute < ops.admin; auth matrix: no-token→401, hr001(ops rolü yok)→**404** (indistinguishability), opsadmin→200, opsuser01→200 ✅; port dışarı publish edilmemiş; Docker socket mount yok; servis durumu host services snapshot dosyasından okunur (`platform-services-status.timer`, 5 dk); `ops.audit_events` PostgreSQL tablosu; X-Correlation-Id response header; `/ops/me`, `/ops/version`, `/ops/dashboard` hazır; logout sonrası `/ops/me`→401 doğrulandı |
 | OpsApi V2 — Write Ops | Tasarlandı, henüz yok | **Observability Faz 1 sonrası** | POST /ops/backups/trigger (ops.execute), POST /ops/restore (ops.admin zorunlu); host systemctl erişim yöntemi belirlenmeli |
 | Observability | Log + audit + health + Ops Dashboard V1 var; metrics/tracing/Grafana yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id/correlation standardı, structured logs, `/metrics`, Prometheus ve Grafana sıradaki faz |
 
@@ -253,6 +253,9 @@ Safe test sonuçları:
 
 ```text
 /ops/dashboard JSON bütünlüğü          -> OK
+opsuser01 read-only                    -> OK (/ops/dashboard 200, execute/admin false)
+BFF refresh endpoint                   -> OK
+Ops denied audit kayıtları             -> OK (no_token, ops_role_missing)
 X-Correlation-Id response header       -> OK
 En büyük P001 dosyası download         -> 3,816,264 bytes; metadata ile uyumlu
 20 eşzamanlı HR login                  -> OK
@@ -298,6 +301,12 @@ Ek hardening:
 - `tools/server-security-headers-test.sh` Gateway header/CSP smoke testi için eklendi.
 - Ops Console refresh hatasında mevcut veriyi silmez; 401 durumunda BFF refresh dener, kısa kesintide bir kez retry eder
   ve eski veriyi koruyarak uyarı gösterir.
+- Backup snapshot ile services snapshot ayrıldı: backup günde 1 alınır, services snapshot 5 dakikada bir container
+  CPU/RAM/restart/uptime bilgisini yeniler. Ops UI “Ölçüm” etiketi services snapshot zamanını gösterir.
+- Ops UI container `Uptime` değeri son `git pull` zamanı değil Docker container'ın son start zamanıdır;
+  compose değişmeyen container'ları recreate etmeyebilir.
+- Ops UI “Son yedek” değeri `.backup-status` yerine en yeni backup klasöründen hesaplanır; `.backup-status`
+  son backup job sonucunu izlemek için kullanılır.
 
 ## Test ortamı
 

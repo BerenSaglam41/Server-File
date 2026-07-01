@@ -239,6 +239,9 @@ systemctl list-timers 'platform-*'
 # platform-services-status.timer → her 5 dakikada servis snapshot
 ```
 
+Not: `platform-backup.timer` gerçek yedek üretir; `platform-services-status.timer` yedek değildir,
+Ops ekranındaki container CPU/RAM/restart/age ölçüm snapshot'ını üretir.
+
 Manuel test (timer'ı beklemeden):
 
 ```bash
@@ -321,6 +324,9 @@ bash tools/server-security-headers-test.sh
 `tools/server-safe-test-suite.sh` sistemi bozmadan daha derin kontroller yapar:
 
 - `/ops/dashboard` JSON alan bütünlüğü
+- `opsuser01` read-only yetki doğrulaması
+- BFF refresh endpoint kontrolü
+- denied ops audit kayıtları (`no_token`, `ops_role_missing`)
 - `X-Correlation-Id` response header
 - en büyük mevcut personel dosyasını indirip boyut doğrulama
 - 20 eşzamanlı login
@@ -366,6 +372,12 @@ curl -k -b cookies.txt https://localhost:5090/ops/dashboard
 
 `/ops/dashboard` şu alanları döndürür: Gateway/Postgres/FileService/OpsApi health, container servisleri,
 disk durumu, alert listesi, backup retention/toplam/doluluk özeti ve `commit/branch/build` metadata.
+
+Ops ekranındaki `Ölçüm` zamanı container services snapshot zamanıdır. `Son yedek` ise en yeni backup
+klasöründen hesaplanır; backup timer günde 1 çalışır.
+
+Container tablosundaki `Uptime`, son `git pull` zamanı değil Docker container'ın son start zamanıdır.
+`docker compose up --build -d` değişmeyen container'ları recreate etmeyebilir; bu durumda uptime devam eder.
 
 Not: OpsApi container'ına Docker socket mount edilmez. Container durumları host tarafındaki
 `tools/services-status.sh` ile `/backup/platform-files/.services-status.json` dosyasına yazılır;
