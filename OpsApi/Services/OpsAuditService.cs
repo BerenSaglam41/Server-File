@@ -12,6 +12,8 @@ public sealed class OpsAuditService(NpgsqlDataSource db)
         ["/ops/alerts"]   = "ops.alerts.list",
         ["/ops/backups"]  = "ops.backups.list",
         ["/ops/version"]  = "ops.version.read",
+        ["/ops/dashboard"] = "ops.dashboard.read",
+        ["/ops/me"] = "ops.me.read",
     };
 
     public static string MapAction(string method, string path)

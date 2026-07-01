@@ -148,9 +148,13 @@ services:
       ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
       STATUS_ROOT: "/ops/status-files"
       AUDIT_ROOT: "/ops/audit"
+      BACKUP_RETAIN: "${BACKUP_RETAIN:-14}"
+      GIT_COMMIT: "${GIT_COMMIT:-unknown}"
+      GIT_BRANCH: "${GIT_BRANCH:-unknown}"
+      BUILD_VERSION: "${BUILD_VERSION:-dev}"
+      BUILD_TIME: "${BUILD_TIME:-unknown}"
     volumes:
       - /backup/platform-files:/ops/status-files:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/log/platform-ops:/ops/audit
     depends_on:
       postgres:

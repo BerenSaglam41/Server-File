@@ -67,13 +67,13 @@ hardening olarak tut.**
 |---|---|---|---|
 | Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı; FileService container staging→export probe geçti |
 | Secret rotasyonu | Demo secret'lar compose/realm içinde duruyor | **Canlıya çıkmadan önce zorunlu** | Prod deploy gerçek secret'ları env/secret store'dan alıyor; demo kullanıcı/parola prod realm'de yok |
-| Backup/restore otomasyonu | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | `platform-backup.timer` (günlük 02:00 UTC) + `platform-restore-test.timer` (haftalık Pazar 03:00 UTC) aktif; `tools/restore-live.sh` ile uçtan uca canlı restore test edildi: File A (backup'ta) → 200, File B (backup sonrası eklendi) → 403/silindi ✅ |
+| Backup/restore otomasyonu | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | `platform-backup.timer` (günlük 02:00 UTC) + günlük backup sonrası restore doğrulaması + `platform-restore-test.timer` (haftalık Pazar 03:00 UTC) aktif; `tools/restore-live.sh` uçtan uca test edildi ama yalnız Break Glass / Manual Recovery prosedürü |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
-| NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | FileService runtime NFS'e yazamıyor; publisher/ops süreci atomik publish yapıyor; upload akışı buna göre değişmiş |
+| NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | Mevcut minimum-prod modelde FileService runtime NFS'e yalnız allowlist üzerinden rw yazar; strict modelde publisher/ops süreci ayrıca tasarlanacak |
 | Disk kapasitesi izleme | **Tamamlandı (2026-07-01)** | **Kapandı** | `platform-disk-check.timer` saatlik çalışır; WARN=%80, CRIT=%90; `.disk-status` yazar; `setup-server.sh` raporlar; Docker build cache temizliği ile API sunucusu %77→%57'ye düşürüldü |
-| OpsApi V1 — Read-Only | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; rol hiyerarşisi: ops.read < ops.execute < ops.admin; auth matrix: no-token→401, hr001(ops rolü yok)→**404** (indistinguishability), opsadmin→200, opsuser01→200 ✅; port dışarı publish edilmemiş; `ops.audit_events` PostgreSQL tablosu (id/actor/action/result/reason_code/correlation_id/created_at/ip/path/method/duration_ms); X-Correlation-Id response header; nginx resolver 127.0.0.11 ile DNS cache sorunu kalıcı çözüldü; /ops/version eklendi |
+| OpsApi V1 — Read-Only | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; rol hiyerarşisi: ops.read < ops.execute < ops.admin; auth matrix: no-token→401, hr001(ops rolü yok)→**404** (indistinguishability), opsadmin→200, opsuser01→200 ✅; port dışarı publish edilmemiş; Docker socket mount yok; servis durumu host snapshot dosyasından okunur; `ops.audit_events` PostgreSQL tablosu; X-Correlation-Id response header; `/ops/me`, `/ops/version`, `/ops/dashboard` hazır |
 | OpsApi V2 — Write Ops | Tasarlandı, henüz yok | **Observability Faz 1 sonrası** | POST /ops/backups/trigger (ops.execute), POST /ops/restore (ops.admin zorunlu); host systemctl erişim yöntemi belirlenmeli |
-| Observability | Log + audit + health var; metrics/tracing/dashboard yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id tüm katmanlarda izleniyor; `/metrics`, Prometheus ve Grafana devreye alınmış |
+| Observability | Log + audit + health + Ops Dashboard V1 var; metrics/tracing/Grafana yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id/correlation standardı, structured logs, `/metrics`, Prometheus ve Grafana sıradaki faz |
 
 Önerilen sıra:
 
@@ -250,7 +250,7 @@ dosya-sistemi-projesi/
   │     ├── fileservice.crt/key        <- FileServiceApi server cert (CN=fileservice)
   │     ├── yonetimapi.crt/key         <- YonetimApi client cert
   │     └── filoapi.crt/key            <- FlotaApi client cert
-  ├── docker-compose.yml               <- 6 servis: postgres, keycloak, fileservice, yonetimapi, flotaapi, gateway(nginx)
+  ├── docker-compose.yml               <- servisler: postgres, keycloak, fileservice, yonetimapi, flotaapi, opsapi, client, gateway(nginx)
   ├── docker-compose.override.yml      <- Dev-only port mapping (5205, 5076, 5077)
   ├── nginx/
   │     └── nginx.conf                 <- Gateway routing: /api/personnel→yonetimapi, /api/vehicles→flotaapi
@@ -263,8 +263,9 @@ dosya-sistemi-projesi/
   │     ├── backup-files01.sh          <- Files-01 export + PostgreSQL dump backup
   │     ├── restore-test.sh            <- Backup hash doğrulama / restore probe
   │     ├── restore-live.sh            <- Canlı sistemi belirtilen backup noktasına geri sarar
-  │     ├── install-backup-timers.sh   <- Systemd backup+restore timer'larını kurar (root)
-  │     └── server-smoke-test.sh       <- Deploy sonrası gateway/login/list/download/403/audit smoke test
+  │     ├── install-backup-timers.sh   <- Systemd backup/restore/disk/services timer'larını kurar (root)
+  │     ├── services-status.sh         <- Docker socket'i OpsApi'ye vermeden servis snapshot yazar
+  │     └── server-smoke-test.sh       <- Deploy sonrası gateway/login/list/download/403/ops/audit smoke test
   ├── FileServiceApi/                  <- .NET minimal API, mTLS HTTPS:8080 (iç ağ)
   │     ├── Dockerfile
   │     ├── Models/
@@ -1738,7 +1739,12 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
   sonra Prometheus/Grafana/tracing kurulmalı.
 - **Deploy/test otomasyonu**: `tools/server-smoke-test.sh` eklendi. Sonraki iyileştirme olarak branch
   deploy helper (`git fetch && checkout && setup-server && smoke`) tek komuta indirilebilir.
-- **Infrastructure Console (Ops Dashboard)**: Kullanıcı/platform ayrımı olan admin arayüzü. Bölümler: System Health, Services, Storage, Backups, Restore, Audit, Monitoring, **Alerts** (disk/.backup/.restore status burada görünür), Logs, Users, Settings. Ön koşul: observability (structured logs + request ID) ve ops API endpoint'leri tamamlanmalı. Mevcut `.disk-status`, `.backup-status`, `.restore-status` dosyaları bu console'un veri kaynağı olacak.
+- **Ops Dashboard V1 polish**: Read-only console artık `/ops/dashboard` üzerinden System Health, Services,
+  Disk, Alerts, Backups ve Version metadata alır. Docker socket OpsApi'ye mount edilmez; servis listesi
+  `tools/services-status.sh` tarafından yazılan status-file üzerinden okunur. Kalan polish: UI metriklerinin
+  canlı server'da doğrulanması ve ops audit son kayıtları için read endpoint.
+- **restore-live guardrail**: `restore-live.sh` Break Glass / Manual Recovery olarak kalmalı; V2'de çalışmadan
+  önce otomatik pre-restore backup alması eklenecek.
 - **Strict NFS ro/publisher modeli**: Minimum production için şart değil; V2 hardening olarak tutuluyor.
   Bu modele geçilirse FileService runtime NFS'e yazmaz, staging/publish ayrı kontrollü sürece taşınır.
 - **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.

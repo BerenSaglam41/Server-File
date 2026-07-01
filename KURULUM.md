@@ -236,6 +236,7 @@ Timer'ları doğrula:
 systemctl list-timers 'platform-*'
 # platform-backup.timer       → her gün 02:00 UTC
 # platform-restore-test.timer → her Pazar 03:00 UTC
+# platform-services-status.timer → her 5 dakikada servis snapshot
 ```
 
 Manuel test (timer'ı beklemeden):
@@ -246,6 +247,9 @@ journalctl -u platform-backup --no-pager -n 30
 
 sudo systemctl start platform-restore-test.service
 journalctl -u platform-restore-test --no-pager -n 20
+
+sudo systemctl start platform-services-status.service
+journalctl -u platform-services-status --no-pager -n 20
 ```
 
 ---
@@ -291,6 +295,8 @@ bash tools/server-smoke-test.sh
 - `P001` dosya listesi
 - varsa ilk dosyayı download
 - `p001` kullanıcısının başka personele erişemediğini `403` ile doğrulama
+- `opsadmin` login
+- `/ops/me`, `/ops/health`, `/ops/services`, `/ops/disk`, `/ops/backups`, `/ops/version`, `/ops/dashboard`
 - `files.audit_events` son kayıtlarını gösterme
 
 Varsayılanlar:
@@ -313,6 +319,30 @@ BASE_URL=https://192.168.64.5:5090 PERSONNEL_ID=ADM001 bash tools/server-smoke-t
 
 Smoke test sistemi değiştirmemek için otomatik dosya yüklemez. `P001` dosya listesi boşsa download
 kontrolünü uyarı vererek atlar.
+
+### Ops Dashboard
+
+Ops rolü olan kullanıcıyla giriş yapıldığında client içinde `Ops` sekmesi görünür.
+
+Demo hesaplar:
+
+```text
+opsadmin / ops123
+opsuser01 / ops456
+```
+
+Backend tek çağrılık dashboard endpoint'i:
+
+```bash
+curl -k -b cookies.txt https://localhost:5090/ops/dashboard
+```
+
+`/ops/dashboard` şu alanları döndürür: Gateway/Postgres/FileService/OpsApi health, container servisleri,
+disk durumu, alert listesi, backup retention/toplam/doluluk özeti ve `commit/branch/build` metadata.
+
+Not: OpsApi container'ına Docker socket mount edilmez. Container durumları host tarafındaki
+`tools/services-status.sh` ile `/backup/platform-files/.services-status.json` dosyasına yazılır;
+OpsApi bu snapshot'ı salt-okunur okur.
 
 ---
 

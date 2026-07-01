@@ -7,6 +7,7 @@
 #   BASE_URL=https://localhost:5090
 #   HR_USER=hr001 HR_PASS='Demo1234!'
 #   SELF_USER=p001 SELF_PASS='Demo1234!'
+#   OPS_USER=opsadmin OPS_PASS='ops123'
 #   PERSONNEL_ID=P001 OTHER_PERSONNEL_ID=P002
 
 set -euo pipefail
@@ -16,6 +17,8 @@ HR_USER="${HR_USER:-hr001}"
 HR_PASS="${HR_PASS:-Demo1234!}"
 SELF_USER="${SELF_USER:-p001}"
 SELF_PASS="${SELF_PASS:-Demo1234!}"
+OPS_USER="${OPS_USER:-opsadmin}"
+OPS_PASS="${OPS_PASS:-ops123}"
 PERSONNEL_ID="${PERSONNEL_ID:-P001}"
 OTHER_PERSONNEL_ID="${OTHER_PERSONNEL_ID:-P002}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
@@ -25,6 +28,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 HR_COOKIE="$WORK_DIR/hr.cookies"
 SELF_COOKIE="$WORK_DIR/self.cookies"
+OPS_COOKIE="$WORK_DIR/ops.cookies"
 
 log() {
   printf '[..] %s\n' "$*"
@@ -148,6 +152,22 @@ status="$(curl -k -sS -o "$WORK_DIR/forbidden.body" -w '%{http_code}' \
   -b "$SELF_COOKIE" \
   "$BASE_URL/api/personnel/$OTHER_PERSONNEL_ID/files")"
 expect_status "403" "$status" "$SELF_USER başka personele erişemez" "$WORK_DIR/forbidden.body"
+
+log "$OPS_USER ile ops login deneniyor"
+status="$(curl -k -sS -o "$WORK_DIR/ops-login.body" -w '%{http_code}' \
+  -c "$OPS_COOKIE" \
+  -H 'Content-Type: application/json' \
+  -X POST "$BASE_URL/api/auth/login" \
+  --data "{\"username\":\"$OPS_USER\",\"password\":\"$OPS_PASS\"}")"
+expect_status "200" "$status" "Ops login" "$WORK_DIR/ops-login.body"
+
+for endpoint in me health services disk backups version dashboard; do
+  log "/ops/$endpoint kontrol ediliyor"
+  status="$(curl -k -sS -o "$WORK_DIR/ops-$endpoint.body" -w '%{http_code}' \
+    -b "$OPS_COOKIE" \
+    "$BASE_URL/ops/$endpoint")"
+  expect_status "200" "$status" "/ops/$endpoint" "$WORK_DIR/ops-$endpoint.body"
+done
 
 log "Audit son kayıtlar okunuyor"
 postgres_container="$(docker compose -f "$COMPOSE_FILE" ps -q postgres 2>/dev/null || true)"

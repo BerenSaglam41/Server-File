@@ -332,6 +332,7 @@ sudo bash tools/install-backup-timers.sh
 Script şu işlemleri yapar:
 - `platform-backup.service` + `platform-backup.timer` → her gün 02:00 UTC
 - `platform-restore-test.service` + `platform-restore-test.timer` → her Pazar 03:00 UTC
+- `platform-services-status.service` + `platform-services-status.timer` → her 5 dakikada servis snapshot
 - Eski backup temizleme: `BACKUP_RETAIN=14` (son 14 backup tutulur)
 - `systemctl enable --now` ile timer'lar hemen devreye girer
 
@@ -363,6 +364,9 @@ journalctl -u platform-backup --no-pager -n 50
 
 sudo systemctl start platform-restore-test.service
 journalctl -u platform-restore-test --no-pager -n 50
+
+sudo systemctl start platform-services-status.service
+journalctl -u platform-services-status --no-pager -n 20
 ```
 
 Backup içeriğini doğrula:
@@ -384,9 +388,26 @@ journalctl -u platform-restore-test -f
 ### 4.3 Kabuller
 
 - `platform-backup.service` başarısız çıkış kodu döndürürse `journalctl` ve `systemctl status platform-backup` ile teşhis yapılır.
+- Günlük backup başarılı olunca `ExecStartPost` ile restore doğrulaması da çalışır; haftalık restore testi ayrıca korunur.
 - Restore testi canlı `export/` alanına yazmaz; yalnız `restore-tests/<timestamp>/export` altında hash doğrulaması yapar.
 - Backup çıktısı tek kopya kalmamalıdır. `rsync` veya `rclone` ile ayrı VM, disk veya object storage'a kopyalanması önerilir.
 - `SKIP_DB_DUMP=1` yalnız storage testi için kullanılır; production timer'larında bulunmamalıdır.
+
+### 4.4 Docker socket ve live restore sınırı
+
+OpsApi container'ına `/var/run/docker.sock` mount edilmez. Docker socket container içine verilirse
+read-only görünse bile host Docker daemon üzerinde geniş etki alanı oluşur. Bunun yerine host tarafındaki
+`tools/services-status.sh` systemd timer veya `setup-server.sh` tarafından çalışır ve
+`/backup/platform-files/.services-status.json` üretir. OpsApi bu dosyayı `/ops/status-files` üzerinden
+salt-okunur okur.
+
+`AUDIT_ROOT=/ops/audit` mount'u bilerek tutulur. V1'de PostgreSQL audit ana kaynaktır; bu path ileride
+file sink, SIEM forwarder veya immutable audit export için rezerve edilmiştir.
+
+`tools/restore-live.sh` yalnız **Break Glass / Manual Recovery** prosedürüdür. UI veya OpsApi V1 üzerinden
+otomatik tetiklenmez. Canlı sistemi belirtilen backup noktasına geri sardığı için operatör onayı,
+journal kaydı ve öncesinde otomatik pre-restore backup gerektirir. Pre-restore backup V2 işi olarak
+planlıdır; tamamlanmadan live restore rutin operasyon komutu gibi kullanılmamalıdır.
 
 ## 5. Sertifika Üretimi ve Rotasyon
 
@@ -512,6 +533,7 @@ Production'a geçmeden önce şu kapılar tamamlanır:
 | Storage health | `.probe` okunuyor |
 | Write path | Upload 200, archive 200, DB rollback testi temiz |
 | Deploy smoke | `bash tools/server-smoke-test.sh` gateway/login/list/download/403/audit kontrollerini geçiyor |
+| Ops dashboard | `/ops/dashboard` health/services/disk/alerts/backups/version tek response döndürüyor; `commit/branch/build` unknown değil |
 | Backup | Otomasyon export/manifests/db dump üretir ve sonucu izlenir |
 | Restore test | Periyodik restore testi restore-tests altında hash doğrular |
 | Denial test | API dışı host NFS mount/2049 erişimi alamıyor |

@@ -8,7 +8,7 @@ Bu dosya local/demo test ortamı içindir. Üretim bilgisi değildir.
 - Frontend client: `frontend-test`
 - Login adresi: `http://127.0.0.1:5173/`
 - Gateway: `http://localhost:5090`
-- Tüm demo kullanıcıların şifresi: `Demo1234!`
+- Personel demo kullanıcılarının şifresi: `Demo1234!`
 
 ## Yetki Özeti
 
@@ -18,6 +18,8 @@ Bu dosya local/demo test ortamı içindir. Üretim bilgisi değildir.
 | Admin | `personnel.files.read.all`, `personnel.files.write.all` | Tüm personeli görür, dosya yükler/arşivler |
 | Manager | `personnel.files.read.team` | Kendi kaydı + yönettiği ekip kayıtlarını görür |
 | Self | `personnel.files.read.self` | Sadece kendi personel kaydını görür |
+| Ops Read | `ops.read` | Ops Konsolu read-only ekranlarını görür |
+| Ops Admin | `ops.read`, `ops.admin` | Ops Konsolu tam yetki rolü; V1'de read-only ekranları görür |
 
 ## Login Hesapları
 
@@ -52,6 +54,13 @@ Bu dosya local/demo test ortamı içindir. Üretim bilgisi değildir.
 | `p022` | `Demo1234!` | `P022` | Seda Acar | seda.acar@demo.local | Sales | Self |
 | `p023` | `Demo1234!` | `P023` | Okan Durmaz | okan.durmaz@demo.local | Sales | Self |
 | `p024` | `Demo1234!` | `P024` | Irem Uslu | irem.uslu@demo.local | Sales | Self |
+
+## Ops Hesapları
+
+| Login | Şifre | Roller | Kapsam |
+|---|---|---|---|
+| `opsadmin` | `ops123` | `ops.read`, `ops.admin` | Ops dashboard ve V1 read-only kontroller |
+| `opsuser01` | `ops456` | `ops.read` | Ops dashboard ve V1 read-only kontroller |
 
 ## Ekip İlişkileri
 

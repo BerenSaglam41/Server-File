@@ -1,6 +1,6 @@
-using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Npgsql;
 
 namespace OpsApi.Endpoints;
 
@@ -8,6 +8,8 @@ public static class OpsEndpoints
 {
     private static readonly string StatusRoot =
         Environment.GetEnvironmentVariable("STATUS_ROOT") ?? "/ops/status-files";
+    private static readonly int BackupRetain =
+        int.TryParse(Environment.GetEnvironmentVariable("BACKUP_RETAIN"), out var retain) ? retain : 14;
 
     public static void MapOpsEndpoints(this WebApplication app)
     {
@@ -19,26 +21,62 @@ public static class OpsEndpoints
         ops.MapGet("/alerts",   GetAlerts);
         ops.MapGet("/backups",  GetBackups);
         ops.MapGet("/version",  GetVersion);
+        ops.MapGet("/dashboard", GetDashboard);
+        ops.MapGet("/me", GetMe);
     }
 
     // GET /ops/health — her servisin HTTP health endpoint'ini çağırır
-    private static async Task<IResult> GetHealth(IHttpClientFactory factory)
+    private static async Task<IResult> GetHealth(IHttpClientFactory factory, NpgsqlDataSource db) =>
+        Results.Ok(await BuildHealthAsync(factory, db));
+
+    // GET /ops/dashboard — UI için tek çağrıda ops özeti
+    private static async Task<IResult> GetDashboard(IHttpClientFactory factory, NpgsqlDataSource db)
     {
-        // gateway HTTPS-only; fileservice mTLS gerektirir — bunlar Docker socket ile /ops/services'ten izlenir
-        var targets = new Dictionary<string, string>
+        var servicesTask = BuildServicesAsync();
+        var healthTask = BuildHealthAsync(factory, db);
+
+        await Task.WhenAll(servicesTask, healthTask);
+
+        return Results.Ok(new
         {
-            ["yonetimapi"] = "http://yonetimapi:8080/health",
-            ["flotaapi"]   = "http://flotaapi:8080/health",
-            ["keycloak"]   = "http://keycloak:8080/realms/platform",
-        };
+            timestamp = DateTime.UtcNow,
+            health = healthTask.Result,
+            services = servicesTask.Result,
+            disk = BuildDisk(),
+            alerts = BuildAlerts(),
+            backups = BuildBackups(),
+            version = BuildVersion(),
+        });
+    }
+
+    private static async Task<object> BuildHealthAsync(IHttpClientFactory factory, NpgsqlDataSource db)
+    {
+        var containers = LoadServiceStatus();
+        var results = new List<object>();
+        var overall = "healthy";
+
+        void Add(string name, string status, long? latencyMs = null, string? reason = null)
+        {
+            if (status != "healthy") overall = "degraded";
+            results.Add(new { name, status, latency_ms = latencyMs, reason });
+        }
 
         var client  = factory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(5);
 
-        var results = new List<object>();
-        var overall = "healthy";
+        await AddHttpHealthAsync("yonetimapi", "http://yonetimapi:8080/health");
+        await AddHttpHealthAsync("flotaapi", "http://flotaapi:8080/health");
+        await AddHttpHealthAsync("keycloak", "http://keycloak:8080/realms/platform");
 
-        foreach (var (name, url) in targets)
+        await AddGatewayHealthAsync();
+        await AddPostgresHealthAsync();
+
+        Add("fileservice", IsContainerRunning(containers, "fileservice") ? "healthy" : "unhealthy", null, "service_status");
+        Add("opsapi", "healthy", null, "self");
+
+        return new { status = overall, timestamp = DateTime.UtcNow, services = results };
+
+        async Task AddHttpHealthAsync(string name, string url)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -46,84 +84,128 @@ public static class OpsEndpoints
                 var resp = await client.GetAsync(url);
                 sw.Stop();
                 var status = resp.IsSuccessStatusCode ? "healthy" : "degraded";
-                if (status != "healthy") overall = "degraded";
-                results.Add(new { name, status, latency_ms = sw.ElapsedMilliseconds });
+                Add(name, status, sw.ElapsedMilliseconds, resp.IsSuccessStatusCode ? null : $"http_{(int)resp.StatusCode}");
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                overall = "degraded";
-                results.Add(new { name, status = "unhealthy", latency_ms = (long?)null, error = ex.Message[..Math.Min(ex.Message.Length, 80)] });
+                Add(name, "unhealthy", null, ex.Message[..Math.Min(ex.Message.Length, 80)]);
             }
         }
 
-        return Results.Ok(new { status = overall, timestamp = DateTime.UtcNow, services = results });
+        async Task AddGatewayHealthAsync()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using var handler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                };
+                using var gateway = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+                var resp = await gateway.GetAsync("https://gateway/health");
+                sw.Stop();
+                Add("gateway", resp.IsSuccessStatusCode ? "healthy" : "degraded", sw.ElapsedMilliseconds,
+                    resp.IsSuccessStatusCode ? null : $"http_{(int)resp.StatusCode}");
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                var dockerStatus = IsContainerRunning(containers, "gateway") ? "degraded" : "unhealthy";
+                Add("gateway", dockerStatus, null, ex.Message[..Math.Min(ex.Message.Length, 80)]);
+            }
+        }
+
+        async Task AddPostgresHealthAsync()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                await using var conn = await db.OpenConnectionAsync();
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "select 1";
+                await cmd.ExecuteScalarAsync();
+                sw.Stop();
+                Add("postgres", "healthy", sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                Add("postgres", "unhealthy", null, ex.Message[..Math.Min(ex.Message.Length, 80)]);
+            }
+        }
     }
 
-    // GET /ops/services — Docker socket üzerinden container listesi
-    private static async Task<IResult> GetServices()
+    // GET /ops/services — host tarafında üretilen status snapshot dosyasından servis listesi
+    private static async Task<IResult> GetServices() => Results.Ok(await BuildServicesAsync());
+
+    private static Task<object> BuildServicesAsync()
     {
-        var dockerSocket = "/var/run/docker.sock";
-        if (!File.Exists(dockerSocket))
-            return Results.Ok(new { note = "Docker socket yok; geliştirme ortamı", services = Array.Empty<object>() });
+        var containers = LoadServiceStatus();
+        if (containers is null)
+            return Task.FromResult<object>(new { note = "Servis status dosyası yok; tools/services-status.sh henüz çalışmadı", count = 0, services = Array.Empty<object>() });
 
-        try
+        return Task.FromResult<object>(new
         {
-            var handler = new SocketsHttpHandler();
-            handler.ConnectCallback = async (_, ct) =>
+            count = containers.Count,
+            services = containers.Select(c =>
             {
-                var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                await sock.ConnectAsync(new UnixDomainSocketEndPoint(dockerSocket), ct);
-                return new NetworkStream(sock, ownsSocket: true);
-            };
-
-            using var docker = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
-            var json = await docker.GetStringAsync("/containers/json?all=true");
-
-            using var doc = JsonDocument.Parse(json);
-            var containers = doc.RootElement.EnumerateArray().Select(c =>
-            {
-                var names = c.GetProperty("Names").EnumerateArray()
-                    .Select(n => n.GetString()!.TrimStart('/'))
-                    .ToArray();
                 return new
                 {
-                    name    = names.FirstOrDefault() ?? "?",
-                    image   = c.GetProperty("Image").GetString(),
-                    status  = c.GetProperty("Status").GetString(),
-                    state   = c.GetProperty("State").GetString(),
-                    created = DateTimeOffset.FromUnixTimeSeconds(c.GetProperty("Created").GetInt64()).UtcDateTime,
+                    name = c.Name,
+                    image = c.Image,
+                    status = c.Status,
+                    state = c.State,
+                    created = c.Created,
                 };
-            }).ToList();
+            }).ToList()
+        });
+    }
 
-            return Results.Ok(new { count = containers.Count, services = containers });
-        }
-        catch (Exception ex)
+    // GET /ops/me — UI'nin kullanıcının ops kimliğini doğrulaması için
+    private static IResult GetMe(HttpContext ctx)
+    {
+        var roles = ExtractRealmRoles(ctx.User).OrderBy(r => r).ToArray();
+        return Results.Ok(new
         {
-            return Results.Problem($"Docker socket hatası: {ex.Message}", statusCode: 502);
-        }
+            username = ctx.User.FindFirst("preferred_username")?.Value
+                       ?? ctx.User.FindFirst("sub")?.Value
+                       ?? "anonymous",
+            authenticated = ctx.User.Identity?.IsAuthenticated == true,
+            roles,
+            permissions = new
+            {
+                read = roles.Any(r => r is "ops.read" or "ops.execute" or "ops.admin"),
+                execute = roles.Any(r => r is "ops.execute" or "ops.admin"),
+                admin = roles.Contains("ops.admin"),
+            },
+        });
     }
 
     // GET /ops/disk — .disk-status dosyasını okur
-    private static IResult GetDisk()
+    private static IResult GetDisk() => Results.Ok(BuildDisk());
+
+    private static object BuildDisk()
     {
         var path = Path.Combine(StatusRoot, ".disk-status");
         if (!File.Exists(path))
-            return Results.Ok(new { status = "unknown", note = "Henüz disk-check çalışmadı" });
+            return new { status = "unknown", note = "Henüz disk-check çalışmadı" };
 
         var fields = ParseStatusFile(path);
-        return Results.Ok(new
+        return new
         {
             status          = fields.GetValueOrDefault("status", "unknown"),
             timestamp       = fields.GetValueOrDefault("timestamp"),
             api_server_pct  = TryParseInt(fields.GetValueOrDefault("api_server_pct")),
             files01_pct     = TryParseInt(fields.GetValueOrDefault("files01_pct")),
             reason          = fields.GetValueOrDefault("reason"),
-        });
+        };
     }
 
     // GET /ops/alerts — 3 status dosyasındaki uyarıları birleştirir
-    private static IResult GetAlerts()
+    private static IResult GetAlerts() => Results.Ok(BuildAlerts());
+
+    private static object BuildAlerts()
     {
         var sources = new[]
         {
@@ -157,14 +239,25 @@ public static class OpsEndpoints
             }
         }
 
-        return Results.Ok(new { count = alerts.Count, alerts });
+        return new { count = alerts.Count, alerts };
     }
 
     // GET /ops/backups — backup dizinlerini listeler
-    private static IResult GetBackups()
+    private static IResult GetBackups() => Results.Ok(BuildBackups());
+
+    private static object BuildBackups()
     {
         if (!Directory.Exists(StatusRoot))
-            return Results.Ok(new { count = 0, backups = Array.Empty<object>() });
+            return new
+            {
+                count = 0,
+                total_size_mb = 0d,
+                retention_limit = BackupRetain,
+                retention_used_pct = 0,
+                last_backup = (string?)null,
+                last_status = (string?)null,
+                backups = Array.Empty<object>()
+            };
 
         var statusFields = File.Exists(Path.Combine(StatusRoot, ".backup-status"))
             ? ParseStatusFile(Path.Combine(StatusRoot, ".backup-status"))
@@ -177,44 +270,134 @@ public static class OpsEndpoints
             .OrderByDescending(d => d.Name)
             .Select(d =>
             {
-                var filesPath = Path.Combine(d.FullName, "files");
-                var dbPath    = Path.Combine(d.FullName, "db");
                 var exportPath = Path.Combine(d.FullName, "export");
                 var dumpPath   = Path.Combine(d.FullName, "platformdb.dump");
+                var filesSizeMb = DirSizeMb(exportPath);
+                var dbSizeMb = File.Exists(dumpPath)
+                    ? Math.Round(new FileInfo(dumpPath).Length / 1_048_576.0, 2)
+                    : (double?)null;
                 return new
                 {
                     date          = d.Name,
-                    files_size_mb = DirSizeMb(exportPath),
-                    db_size_mb    = File.Exists(dumpPath)
-                        ? Math.Round(new FileInfo(dumpPath).Length / 1_048_576.0, 2)
-                        : (double?)null,
+                    files_size_mb = filesSizeMb,
+                    db_size_mb    = dbSizeMb,
+                    total_size_mb = Math.Round((filesSizeMb ?? 0) + (dbSizeMb ?? 0), 2),
                     created       = d.CreationTimeUtc,
                 };
             })
             .ToList();
 
-        return Results.Ok(new
+        var totalSizeMb = Math.Round(dirs.Sum(d => d.total_size_mb), 2);
+        var retentionUsedPct = BackupRetain > 0
+            ? (int)Math.Floor(dirs.Count * 100.0 / BackupRetain)
+            : 0;
+
+        return new
         {
             count         = dirs.Count,
+            total_size_mb = totalSizeMb,
+            retention_limit = BackupRetain,
+            retention_used_pct = retentionUsedPct,
             last_backup   = statusFields.GetValueOrDefault("timestamp"),
             last_status   = statusFields.GetValueOrDefault("status"),
             backups       = dirs,
-        });
+        };
     }
 
     // GET /ops/version — build bilgileri + environment
-    private static IResult GetVersion()
+    private static IResult GetVersion() => Results.Ok(BuildVersion());
+
+    private static object BuildVersion()
     {
         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-        return Results.Ok(new
+        var commit = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown";
+        return new
         {
             service     = "OpsApi",
-            version     = assembly.GetName().Version?.ToString() ?? "1.0.0",
+            version     = Environment.GetEnvironmentVariable("BUILD_VERSION")
+                          ?? assembly.GetName().Version?.ToString()
+                          ?? "1.0.0",
             environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production",
-            commit_hash = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown",
+            commit_hash = commit,
+            commit_short = commit == "unknown" ? "unknown" : commit[..Math.Min(commit.Length, 8)],
+            branch      = Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "unknown",
+            build_time  = Environment.GetEnvironmentVariable("BUILD_TIME") ?? "unknown",
             started_at  = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
             timestamp   = DateTime.UtcNow,
-        });
+        };
+    }
+
+    private static List<ServiceContainer>? LoadServiceStatus()
+    {
+        var path = Path.Combine(StatusRoot, ".services-status.json");
+        if (!File.Exists(path))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("services", out var services) ||
+                services.ValueKind != JsonValueKind.Array)
+                return null;
+
+            return services.EnumerateArray().Select(s =>
+            {
+                var created = GetString(s, "created");
+                DateTime.TryParse(created, out var createdAt);
+                return new ServiceContainer(
+                    GetString(s, "name") ?? GetString(s, "service") ?? "?",
+                    GetString(s, "image") ?? "",
+                    GetString(s, "status") ?? "",
+                    GetString(s, "state") ?? "",
+                    createdAt == default ? DateTime.MinValue : createdAt.ToUniversalTime());
+            }).ToList();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsContainerRunning(List<ServiceContainer>? containers, string namePart) =>
+        containers?.Any(c =>
+            c.Name.Contains(namePart, StringComparison.OrdinalIgnoreCase) &&
+            c.State.Equals("running", StringComparison.OrdinalIgnoreCase)) == true;
+
+    private static string? GetString(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value)) return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null,
+        };
+    }
+
+    private static IReadOnlyCollection<string> ExtractRealmRoles(System.Security.Claims.ClaimsPrincipal user)
+    {
+        var realmAccess = user.FindFirst("realm_access")?.Value;
+        if (realmAccess is null) return [];
+
+        try
+        {
+            using var doc = JsonDocument.Parse(realmAccess);
+            if (!doc.RootElement.TryGetProperty("roles", out var roles) ||
+                roles.ValueKind != JsonValueKind.Array)
+                return [];
+
+            return roles.EnumerateArray()
+                .Select(r => r.GetString())
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Select(r => r!)
+                .ToArray();
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private static Dictionary<string, string> ParseStatusFile(string path)
@@ -244,4 +427,11 @@ public static class OpsEndpoints
 
     private static int? TryParseInt(string? s) =>
         int.TryParse(s, out var v) ? v : null;
+
+    private sealed record ServiceContainer(
+        string Name,
+        string Image,
+        string Status,
+        string State,
+        DateTime Created);
 }

@@ -155,6 +155,13 @@ if [ "$CERTS_NEED_REGEN" = "1" ]; then
 fi
 echo "[OK] Sertifikalar hazır"
 
+# 3.5 Build/version metadata — OpsApi /ops/version ve /ops/dashboard için
+export GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
+export GIT_BRANCH="${GIT_BRANCH:-$(git branch --show-current 2>/dev/null || echo unknown)}"
+export BUILD_VERSION="${BUILD_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+export BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+echo "[OK] Build metadata: commit=$GIT_COMMIT branch=$GIT_BRANCH version=$BUILD_VERSION"
+
 # 4. Docker container'ları kaldır
 echo "[..] Docker container'ları rebuild ediliyor..."
 docker compose $COMPOSE_ARGS up --build -d
@@ -187,6 +194,13 @@ rm -f "$export"
     exit 1
 fi
 echo "[OK] Fileservice container staging -> export yazma/taşıma testi geçti"
+
+echo "[..] Servis status snapshot yazılıyor..."
+if BACKUP_ROOT="${BACKUP_ROOT:-/backup/platform-files}" COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml" bash tools/services-status.sh; then
+    echo "[OK] Servis status snapshot hazır"
+else
+    echo "[UYARI] Servis status snapshot yazılamadı; Ops Dashboard services kartı eski/boş kalabilir"
+fi
 
 # 6. DB schema + seed (tablolar yoksa)
 echo "[..] Veritabanı schema kontrol ediliyor..."

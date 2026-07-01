@@ -42,7 +42,7 @@ echo "  RESTORE_TIME : $RESTORE_TIME"
 echo ""
 
 # Gerekli scriptlerin varlığını doğrula
-for script in tools/backup-files01.sh tools/restore-test.sh tools/disk-check.sh; do
+for script in tools/backup-files01.sh tools/restore-test.sh tools/disk-check.sh tools/services-status.sh; do
   if [ ! -x "$PROJECT_DIR/$script" ]; then
     echo "[HATA] Script bulunamadı veya çalıştırılabilir değil: $PROJECT_DIR/$script" >&2
     echo "chmod +x $PROJECT_DIR/$script" >&2
@@ -160,6 +160,40 @@ WantedBy=timers.target
 EOF
 echo "[OK] $SYSTEMD_DIR/platform-disk-check.timer yazıldı"
 
+# --- platform-services-status.service ---
+cat > "$SYSTEMD_DIR/platform-services-status.service" <<EOF
+[Unit]
+Description=Platform Docker Compose servis durumu snapshot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=BACKUP_ROOT=$BACKUP_ROOT
+Environment=COMPOSE_FILE=$PROJECT_DIR/docker-compose.yml
+ExecStart=$PROJECT_DIR/tools/services-status.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=platform-services-status
+EOF
+echo "[OK] $SYSTEMD_DIR/platform-services-status.service yazıldı"
+
+# --- platform-services-status.timer (5 dakikada bir) ---
+cat > "$SYSTEMD_DIR/platform-services-status.timer" <<EOF
+[Unit]
+Description=Platform servis durumu snapshot timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+echo "[OK] $SYSTEMD_DIR/platform-services-status.timer yazıldı"
+
 # Reload + enable + start
 systemctl daemon-reload
 
@@ -172,6 +206,9 @@ echo "[OK] platform-restore-test.timer aktif"
 systemctl enable --now platform-disk-check.timer
 echo "[OK] platform-disk-check.timer aktif"
 
+systemctl enable --now platform-services-status.timer
+echo "[OK] platform-services-status.timer aktif"
+
 echo ""
 echo "=== Kurulum tamamlandı ==="
 echo ""
@@ -181,6 +218,7 @@ echo "Logları izlemek için:"
 echo "  journalctl -u platform-backup -f"
 echo "  journalctl -u platform-restore-test -f"
 echo "  journalctl -u platform-disk-check -f"
+echo "  journalctl -u platform-services-status -f"
 echo ""
 echo "Manuel test (şimdi çalıştır):"
 echo "  systemctl start platform-backup.service"
@@ -189,3 +227,5 @@ echo "  systemctl start platform-restore-test.service"
 echo "  journalctl -u platform-restore-test --no-pager -n 40"
 echo "  systemctl start platform-disk-check.service"
 echo "  journalctl -u platform-disk-check --no-pager -n 20"
+echo "  systemctl start platform-services-status.service"
+echo "  journalctl -u platform-services-status --no-pager -n 20"

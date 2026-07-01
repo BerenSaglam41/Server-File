@@ -26,6 +26,7 @@ client/node_modules/
 client/dist/
 client/.env
 client/.env.local
+client/tsconfig.tsbuildinfo
 
 # Python
 __pycache__/

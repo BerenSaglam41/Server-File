@@ -1,22 +1,30 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { AuthState, Personnel } from '../types'
 import { searchPersonnel } from '../api'
+import { hasOpsAccess } from '../auth'
 import PersonnelCard from './PersonnelCard'
 import PersonnelFileView from './PersonnelFileView'
 import VehicleFileView from './VehicleFileView'
+import OpsConsole from './OpsConsole'
 
 interface Props {
   auth: AuthState
   onLogout: () => void
 }
 
-type View = 'personnel' | 'fleet'
+type View = 'personnel' | 'fleet' | 'ops'
 
 export default function Dashboard({ auth, onLogout }: Props) {
   const hasFleet      = !!auth.user.vehicle_id
   const hasPersonnel  = auth.user.roles.some(r => r.startsWith('personnel.'))
+  const hasOps        = hasOpsAccess(auth)
+  const availableViews = [
+    ...(hasPersonnel ? [{ value: 'personnel' as const, label: 'Personel' }] : []),
+    ...(hasFleet ? [{ value: 'fleet' as const, label: 'Filo' }] : []),
+    ...(hasOps ? [{ value: 'ops' as const, label: 'Ops' }] : []),
+  ]
 
-  const [view, setView]         = useState<View>(hasFleet && !hasPersonnel ? 'fleet' : 'personnel')
+  const [view, setView]         = useState<View>(availableViews[0]?.value ?? 'personnel')
   const [query, setQuery]       = useState('')
   const [results, setResults]   = useState<Personnel[]>([])
   const [searching, setSearching] = useState(false)
@@ -49,11 +57,17 @@ export default function Dashboard({ auth, onLogout }: Props) {
 
   const roleLabel = hasFleet && !hasPersonnel
     ? 'Araç Kullanıcısı'
+    : hasOps && !hasPersonnel
+    ? 'Ops'
     : auth.user.roles.includes('personnel.files.read.all')
     ? 'İK Yöneticisi'
     : auth.user.roles.includes('personnel.files.read.team')
     ? 'Ekip Yöneticisi'
     : 'Personel'
+
+  if (view === 'ops' && hasOps) {
+    return <OpsConsole auth={auth} onBack={() => setView(availableViews[0]?.value ?? 'personnel')} />
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -70,29 +84,25 @@ export default function Dashboard({ auth, onLogout }: Props) {
             <span className="font-semibold text-gray-900 text-sm hidden sm:block">Platform Dosya</span>
           </div>
 
-          {/* Sekme nav — sadece iki domain varsa göster */}
-          {hasFleet && hasPersonnel && (
+          {/* Sekme nav */}
+          {availableViews.length > 1 && (
             <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-              <button
-                onClick={() => setView('personnel')}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  view === 'personnel'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                Personel
-              </button>
-              <button
-                onClick={() => setView('fleet')}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  view === 'fleet'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                Filo
-              </button>
+              {availableViews.map(item => (
+                <button
+                  key={item.value}
+                  onClick={() => {
+                    setView(item.value)
+                    setSelected(null)
+                  }}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    view === item.value
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
             </div>
           )}
 
@@ -115,7 +125,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
             </div>
           )}
 
-          {view === 'fleet' && <div className="flex-1" />}
+          {view !== 'personnel' && <div className="flex-1" />}
 
           {/* User */}
           <div className="flex items-center gap-2 ml-auto">

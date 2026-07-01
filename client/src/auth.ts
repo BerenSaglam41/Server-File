@@ -14,3 +14,7 @@ export function canWrite(auth: AuthState, personnelId: string): boolean {
 export function canVehicleWrite(auth: AuthState, vehicleId: string): boolean {
   return !!auth.user.vehicle_id && auth.user.vehicle_id === vehicleId
 }
+
+export function hasOpsAccess(auth: AuthState): boolean {
+  return auth.user.roles.some(r => r === 'ops.read' || r === 'ops.execute' || r === 'ops.admin')
+}
