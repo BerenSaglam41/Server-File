@@ -71,7 +71,8 @@ hardening olarak tut.**
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
 | NFS strict ro/publisher modeli | 5 MD'deki en katı hedef; mevcut upload akışı rw NFS bekliyor | **V2 hardening / ops olgunlaştırma** | FileService runtime NFS'e yazamıyor; publisher/ops süreci atomik publish yapıyor; upload akışı buna göre değişmiş |
 | Disk kapasitesi izleme | **Tamamlandı (2026-07-01)** | **Kapandı** | `platform-disk-check.timer` saatlik çalışır; WARN=%80, CRIT=%90; `.disk-status` yazar; `setup-server.sh` raporlar; Docker build cache temizliği ile API sunucusu %77→%57'ye düşürüldü |
-| OpsApi (Operations API) | **Tamamlandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; `ops.read`/`ops.admin` Keycloak rolleri; GET /ops/health, /ops/services, /ops/disk, /ops/alerts, /ops/backups; Docker socket ro mount; opsadmin kullanıcısı; nginx `/ops/*` rotası |
+| OpsApi V1 — Read-Only | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Ayrı .NET servisi; roller: `ops.read` < `ops.execute` < `ops.admin`; auth matrix: no-token→401, hr001→403, opsadmin→200 ✅; port dışarı publish edilmemiş; ops-audit.jsonl ayrı mount (/var/log/platform-ops) — yonetim.audit_events'tan bağımsız; endpoint'ler: /ops/health, /services, /disk, /alerts, /backups |
+| OpsApi V2 — Write Ops | Tasarlandı, henüz yok | **ops.execute tamamlandıktan sonra** | POST /ops/backups/trigger, POST /ops/restore; restore için ops.admin zorunlu; host systemctl erişimi çözülecek |
 | Observability | Log + audit + health var; metrics/tracing/dashboard yok | **Prod hardening ile paralel Faz 1 başlatılabilir** | Request id tüm katmanlarda izleniyor; `/metrics`, Prometheus ve Grafana devreye alınmış |
 
 Önerilen sıra:
