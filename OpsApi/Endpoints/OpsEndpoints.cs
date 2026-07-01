@@ -23,11 +23,10 @@ public static class OpsEndpoints
     // GET /ops/health — her servisin HTTP health endpoint'ini çağırır
     private static async Task<IResult> GetHealth(IHttpClientFactory factory)
     {
+        // gateway HTTPS-only; fileservice mTLS gerektirir — bunlar Docker socket ile /ops/services'ten izlenir
         var targets = new Dictionary<string, string>
         {
-            ["gateway"]    = "http://gateway:80/health",
             ["yonetimapi"] = "http://yonetimapi:8080/health",
-            ["fileservice"]= "http://fileservice:8080/health",
             ["flotaapi"]   = "http://flotaapi:8080/health",
             ["keycloak"]   = "http://keycloak:8080/realms/platform",
         };
@@ -170,9 +169,10 @@ public static class OpsEndpoints
             ? ParseStatusFile(Path.Combine(StatusRoot, ".backup-status"))
             : new Dictionary<string, string>();
 
+        // Backup dizin formatı: 20260701T071527Z (YYYYMMDDTHHMMSSz)
         var dirs = Directory.GetDirectories(StatusRoot)
             .Select(d => new DirectoryInfo(d))
-            .Where(d => d.Name.Length == 8 && d.Name.All(char.IsDigit))
+            .Where(d => d.Name.Length >= 15 && d.Name[8] == 'T')
             .OrderByDescending(d => d.Name)
             .Select(d =>
             {

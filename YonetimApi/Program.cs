@@ -97,6 +97,7 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "YonetimApi" }));
 app.MapAuthEndpoints();
 app.MapPersonnelEndpoints();
 
