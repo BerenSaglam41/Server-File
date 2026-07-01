@@ -1735,12 +1735,6 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
   sonra Prometheus/Grafana/tracing kurulmalı.
 - **Deploy/test otomasyonu**: `tools/server-smoke-test.sh` eklendi. Sonraki iyileştirme olarak branch
   deploy helper (`git fetch && checkout && setup-server && smoke`) tek komuta indirilebilir.
-- **API hata sözlüğü tutarlılığı**: FileService tarafında bazı durumlar teknik olarak `result=denied`
-  audit edilirken YonetimApi/client upload cevabında `error` alanı daha genel kalabiliyor. Production
-  polish için FileService `reason_code` değerleri (`data_scope_denied`, `policy_denied`,
-  `unsupported_media_type`, `storage_unavailable`, `duplicate_file` vb.) YonetimApi response body'lerinde
-  ve client mesajlarında aynı sözlükle taşınmalı. Bu davranış güvenlik açığı değil; destek, debug ve
-  kullanıcı mesajı tutarlılığı için RC sonrası kapatılacak kalite işi.
 - **Strict NFS ro/publisher modeli**: Minimum production için şart değil; V2 hardening olarak tutuluyor.
   Bu modele geçilirse FileService runtime NFS'e yazmaz, staging/publish ayrı kontrollü sürece taşınır.
 - **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
