@@ -178,12 +178,16 @@ public static class OpsEndpoints
             {
                 var filesPath = Path.Combine(d.FullName, "files");
                 var dbPath    = Path.Combine(d.FullName, "db");
+                var exportPath = Path.Combine(d.FullName, "export");
+                var dumpPath   = Path.Combine(d.FullName, "platformdb.dump");
                 return new
                 {
-                    date           = d.Name,
-                    files_size_mb  = DirSizeMb(filesPath),
-                    db_size_mb     = DirSizeMb(dbPath),
-                    created        = d.CreationTimeUtc,
+                    date          = d.Name,
+                    files_size_mb = DirSizeMb(exportPath),
+                    db_size_mb    = File.Exists(dumpPath)
+                        ? Math.Round(new FileInfo(dumpPath).Length / 1_048_576.0, 2)
+                        : (double?)null,
+                    created       = d.CreationTimeUtc,
                 };
             })
             .ToList();
