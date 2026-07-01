@@ -24,6 +24,7 @@ NFS_EXPORT="${NFS_EXPORT:-/srv/files}"
 NFS_MOUNT_OPTIONS="${NFS_MOUNT_OPTIONS:-defaults,_netdev,nfsvers=4.2,proto=tcp}"
 NFS_MODE="${NFS_MODE:-production}" # production | test
 COMPOSE_ARGS="${COMPOSE_ARGS:-}"
+SHOWMOUNT_CHECK="${SHOWMOUNT_CHECK:-0}" # 1 yaparsan showmount ile '*' export kontrolü denenir.
 
 if [ -z "$COMPOSE_ARGS" ]; then
     if [ "$NFS_MODE" = "production" ]; then
@@ -34,11 +35,6 @@ if [ -z "$COMPOSE_ARGS" ]; then
 fi
 
 if [ "$NFS_MODE" = "production" ]; then
-    if ! command -v showmount >/dev/null 2>&1; then
-        echo "[HATA] NFS_MODE=production için showmount gerekli. nfs-common paketini kur."
-        exit 1
-    fi
-
     if command -v nc >/dev/null 2>&1; then
         if ! nc -z -w 3 "$FILES_01_IP" 2049; then
             echo "[HATA] Files-01 NFS portuna erişilemiyor: $FILES_01_IP:2049"
@@ -47,10 +43,10 @@ if [ "$NFS_MODE" = "production" ]; then
         echo "[OK] Files-01 NFS portu erişilebilir ($FILES_01_IP:2049)"
     fi
 
-    if command -v timeout >/dev/null 2>&1; then
-        EXPORTS_OUTPUT="$(timeout 5 showmount -e "$FILES_01_IP" 2>/dev/null || true)"
+    if [ "$SHOWMOUNT_CHECK" = "1" ] && command -v timeout >/dev/null 2>&1 && command -v showmount >/dev/null 2>&1; then
+        EXPORTS_OUTPUT="$(timeout --kill-after=1s 3s showmount -e "$FILES_01_IP" 2>/dev/null || true)"
     else
-        echo "[UYARI] timeout komutu yok; showmount kontrolü atlandı, mount + probe kontrolüyle devam edilecek."
+        echo "[--] showmount kontrolü atlandı; NFSv4/firewall ortamında mount + probe kontrolü kullanılacak."
         EXPORTS_OUTPUT=""
     fi
 
