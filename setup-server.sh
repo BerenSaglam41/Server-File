@@ -200,6 +200,44 @@ else
     echo "[--] DB tablolar zaten var"
 fi
 
+# 7. Backup sağlık kontrolü
+BACKUP_ROOT="${BACKUP_ROOT:-/backup/platform-files}"
+BACKUP_STATUS="$BACKUP_ROOT/.backup-status"
+RESTORE_STATUS="$BACKUP_ROOT/.restore-status"
+echo ""
+echo "[..] Backup sağlık kontrolü..."
+if ! systemctl is-enabled platform-backup.timer >/dev/null 2>&1; then
+    echo "[UYARI] Backup timer kurulu değil. Kurmak için:"
+    echo "         sudo bash tools/install-backup-timers.sh"
+elif [ ! -f "$BACKUP_STATUS" ]; then
+    echo "[UYARI] Henüz backup alınmamış. Manuel tetiklemek için:"
+    echo "         sudo systemctl start platform-backup.service"
+else
+    backup_status_val="$(grep '^status=' "$BACKUP_STATUS" | cut -d= -f2)"
+    backup_ts="$(grep '^timestamp=' "$BACKUP_STATUS" | cut -d= -f2)"
+    if [ "$backup_status_val" = "success" ]; then
+        # 48 saatten yeni mi kontrol et
+        if find "$BACKUP_STATUS" -mtime -2 -type f | grep -q .; then
+            echo "[OK] Son backup başarılı: $backup_ts"
+        else
+            echo "[UYARI] Son backup 48 saatten eski: $backup_ts"
+            echo "         sudo systemctl start platform-backup.service"
+        fi
+    else
+        echo "[HATA] Son backup başarısız! Timestamp: $backup_ts"
+        echo "       Log için: journalctl -u platform-backup --no-pager -n 40"
+    fi
+    if [ -f "$RESTORE_STATUS" ]; then
+        restore_status_val="$(grep '^status=' "$RESTORE_STATUS" | cut -d= -f2)"
+        restore_ts="$(grep '^timestamp=' "$RESTORE_STATUS" | cut -d= -f2)"
+        if [ "$restore_status_val" = "success" ]; then
+            echo "[OK] Son restore testi başarılı: $restore_ts"
+        else
+            echo "[HATA] Son restore testi başarısız! Timestamp: $restore_ts"
+        fi
+    fi
+fi
+
 echo ""
 echo "=== Kurulum tamamlandı ==="
 echo "Durum: docker compose ps"

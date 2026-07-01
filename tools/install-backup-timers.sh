@@ -51,6 +51,8 @@ done
 mkdir -p "$BACKUP_ROOT"
 
 # --- platform-backup.service ---
+# ExecStartPost: backup başarılı olursa restore-test otomatik koşar.
+# Herhangi biri başarısız olursa servis failed sayılır ve journalctl'de görünür.
 cat > "$SYSTEMD_DIR/platform-backup.service" <<EOF
 [Unit]
 Description=Platform daily backup — Files-01 export and PostgreSQL dump
@@ -64,6 +66,7 @@ Environment=STORAGE_ROOT=$STORAGE_ROOT
 Environment=BACKUP_ROOT=$BACKUP_ROOT
 Environment=BACKUP_RETAIN=$BACKUP_RETAIN
 ExecStart=$PROJECT_DIR/tools/backup-files01.sh
+ExecStartPost=$PROJECT_DIR/tools/restore-test.sh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=platform-backup

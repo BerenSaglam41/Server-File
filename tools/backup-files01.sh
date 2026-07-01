@@ -15,6 +15,13 @@ SKIP_DB_DUMP="${SKIP_DB_DUMP:-0}"
 BACKUP_RETAIN="${BACKUP_RETAIN:-14}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DEST="$BACKUP_ROOT/$STAMP"
+STATUS_FILE="$BACKUP_ROOT/.backup-status"
+
+mkdir -p "$BACKUP_ROOT"
+
+# Status dosyasını EXIT trap ile yaz — başarısız olsa bile durum kayıt altına alınır
+_backup_result=failed
+trap 'printf "status=%s\ntimestamp=%s\nbackup_dir=%s\n" "$_backup_result" "$STAMP" "$DEST" > "$STATUS_FILE"' EXIT
 
 EXPORT_DIR="$STORAGE_ROOT/export"
 MANIFESTS_DIR="$STORAGE_ROOT/manifests"
@@ -86,3 +93,5 @@ if [ "$to_remove" -gt 0 ]; then
 else
   echo "[--] Retention: $total backups, no cleanup needed (limit $BACKUP_RETAIN)"
 fi
+
+_backup_result=success

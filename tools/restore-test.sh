@@ -10,6 +10,11 @@ STORAGE_ROOT="${STORAGE_ROOT:-${STORAGE_PATH:-/Volumes/platform-files}}"
 BACKUP_ROOT="${BACKUP_ROOT:-$ROOT_DIR/backups}"
 BACKUP_DIR="${1:-}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+STATUS_FILE="$BACKUP_ROOT/.restore-status"
+
+# Status dosyasını EXIT trap ile yaz
+_restore_result=failed
+trap 'printf "status=%s\ntimestamp=%s\n" "$_restore_result" "$STAMP" > "$STATUS_FILE"' EXIT
 
 if command -v sha256sum >/dev/null 2>&1; then
   SHA256_CHECK_CMD="sha256sum -c"
@@ -57,3 +62,4 @@ result=success
 EOF
 
 echo "[OK] Restore test completed: $RESTORE_ROOT"
+_restore_result=success
