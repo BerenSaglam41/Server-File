@@ -21,18 +21,19 @@ mkdir -p "$BACKUP_ROOT"
 
 raw="$(mktemp)"
 tmp="$(mktemp)"
-trap 'rm -f "$raw" "$tmp"' EXIT
+err="$(mktemp)"
+trap 'rm -f "$raw" "$tmp" "$err"' EXIT
 
 compose_project_name() {
   docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("name",""))' 2>/dev/null || true
 }
 
-if docker compose -f "$COMPOSE_FILE" ps -a --format json > "$raw" 2>/tmp/platform-services-status.err; then
+if docker compose -f "$COMPOSE_FILE" ps -a --format json > "$raw" 2>"$err"; then
   if [ ! -s "$raw" ] || [ "$(tr -d '[:space:]' < "$raw")" = "[]" ]; then
     project="$(compose_project_name)"
     if [ -n "$project" ]; then
-      docker ps -a --filter "label=com.docker.compose.project=$project" --format '{{json .}}' > "$raw" 2>/tmp/platform-services-status.err || true
+      docker ps -a --filter "label=com.docker.compose.project=$project" --format '{{json .}}' > "$raw" 2>"$err" || true
     fi
   fi
   python3 - "$raw" "$tmp" "$STAMP" <<'PY'
@@ -133,7 +134,7 @@ PY
   mv "$tmp" "$STATUS_FILE"
   echo "[OK] Services status yazıldı: $STATUS_FILE"
 else
-  reason="$(cat /tmp/platform-services-status.err 2>/dev/null || true)"
+  reason="$(cat "$err" 2>/dev/null || true)"
   python3 - "$STATUS_FILE" "$STAMP" "$reason" <<'PY'
 import json
 import os

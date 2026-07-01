@@ -1812,6 +1812,51 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
 
 ---
 
+## Ops Dashboard Boş Konteyner Bug Fix (TAMAMLANDI ✅ — 2026-07-01)
+
+Prod sunucuda (192.168.64.5) Ops ekranının "Services" sekmesi tüm konteynerler çalışırken boş görünüyordu.
+
+### Kök neden
+
+`tools/services-status.sh`, `docker compose ps` stderr'ini sabit bir yola (`/tmp/platform-services-status.err`)
+yönlendiriyordu (diğer geçici dosyalar `mktemp` kullanırken bu kullanmıyordu). Bu dosya bir noktada
+`fileapi` kullanıcısıyla (root olmayan) oluşmuştu. `platform-services-status.timer` script'i `root` olarak
+çalıştırdığında bu dosyaya yazamadı (sahiplik çakışması, tmpfs `usrquota` mount seçeneğiyle birleşince),
+redirection `docker compose ps` çalışmadan başarısız oldu, script `else` (hata) dalına düştü ve
+`/backup/platform-files/.services-status.json` dosyasına `status:"failed", count:0, services:[]` yazdı.
+İlk hata anında henüz iyi bir önceki snapshot olmadığından fallback da boş kaldı ve her 5 dakikada bir
+aynı boş sonuç kendini tekrarladı. OpsApi `/ops/services` ve `/ops/dashboard` bu dosyayı okuduğu için
+Services sekmesi sürekli boş göründü — halbuki 8 konteynerin tamamı sağlıklı çalışıyordu.
+
+### Fix
+
+- `tools/services-status.sh`: stderr dosyası artık `err="$(mktemp)"` ile üretiliyor, `trap` temizliğine eklendi,
+  sabit `/tmp/platform-services-status.err` yolu tamamen kaldırıldı. Artık kullanıcı/sahiplik farkı ne olursa
+  olsun çakışma yaşanmaz.
+- Sunucuda (192.168.64.5) düzeltilmiş script deploy edildi, `platform-services-status.service` manuel tetiklendi,
+  `.services-status.json` `status:"success", count:8` üretti; timer normal 5 dakikalık döngüsüne devam ediyor.
+
+### Doğrulama
+
+- `bash tools/server-smoke-test.sh` sunucuda uçtan uca çalıştırıldı: gateway health, hr001/p001/opsadmin login,
+  personel/dosya erişimi, 403 yetki reddi, tüm `/ops/*` endpoint'leri (200), audit son kayıtlar — hepsi geçti.
+- `opsadmin` cookie'siyle `/ops/services` ve `/ops/dashboard` doğrudan sorgulandı: `services.count: 8`,
+  `health.status: healthy`, 7 servisin health check'i (`yonetimapi/flotaapi/keycloak/gateway/postgres/fileservice/opsapi`)
+  tek tek `healthy` döndü.
+- files01 (192.168.64.3) NFS export ve api-server (192.168.64.5) NFS mount ayrıca kontrol edildi: export
+  yalnız `192.168.64.5`'e açık (production-hardening modeliyle uyumlu), mount `nfs4` ile aktif, disk kullanımı
+  api-server %72 / files01 %35 — ikisi de normal aralıkta.
+
+### Kalan not
+
+Bu, `services-status.sh`'ın kendi kendini iyileştiremediği bir senaryoydu (ilk hata → boş fallback → sonsuz
+tekrar). Script artık bu spesifik çakışmayı yaşayamaz, ama script'in genel olarak "N kez üst üste failed
+durumunda alerts'e critical düşür" gibi bir kendiliğinden kurtulma/alarm mekanizması yok — gelecekte benzer
+farklı bir hata türü (ör. docker daemon geçici kopması) yine sessizce süresiz "failed" snapshot'ta takılı
+kalabilir. V2 alerting iyileştirmesi olarak değerlendirilebilir.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
