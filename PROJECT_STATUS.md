@@ -1885,6 +1885,31 @@ firewall'ın kapalı olması "Firewall + NFS allowlist" production kapısını y
 (files01) kilitli, api-server tarafı değil. Öneri: api sunucusunda da `ufw` etkinleştirilip yalnızca
 `22/tcp` (yönetim) ve `5090/tcp` (gateway) allow edilmeli; `111` dış ağdan erişilmemeli.
 
+**Kapatıldı (2026-07-01):** api sunucusunda `ufw` etkinleştirildi. Kilitlenme riskine karşı sıralı uygulandı:
+önce `ufw allow 22/tcp`, sonra `ufw allow 5090/tcp`, ardından `ufw --force enable`. Etkinleştirme sonrası
+yeni bir SSH oturumu açılıp bağlantının kopmadığı doğrulandı, Mac'ten gateway'e `https://192.168.64.5:5090/health`
+ile erişim test edildi (200), NFS mount'un (api-server'ın kendi outbound client bağlantısı, inbound kuralından
+etkilenmez) hâlâ aktif olduğu kontrol edildi, tam smoke test tekrar çalıştırıldı — hepsi geçti. `111` (rpcbind)
+için allow kuralı eklenmedi; artık dışarıdan erişilemiyor (varsayılan deny), api-server'ın kendi NFS client
+mount'unu etkilemiyor çünkü bu outbound bir bağlantı. Artık her iki sunucuda da host firewall gerçek ve
+doğrulanmış durumda — "Firewall + NFS allowlist" production kapısı tamamlandı.
+
+### Ops Console "Ölçüm" zamanı arka plan sekmesinde donuyordu (TAMAMLANDI ✅ — 2026-07-01)
+
+Kullanıcı Ops ekranını uzun süre arka planda bırakınca "Ölçüm" saati gerçek zamandan ~1 saat geride
+kaldığını fark etti; "Uptime" sütunu da bununla tutarsız görünüyordu. Kök neden araştırıldı: backend
+(`platform-services-status.timer`) tam 5 dakikada bir sorunsuz çalışıyor, snapshot her zaman tazeydi —
+sorun backend'de değildi. Gerçek sebep: `client/src/components/OpsConsole.tsx` `setInterval(refresh, 30_000)`
+ile pollüyor, ama tarayıcılar (özellikle Safari/macOS) arka plandaki/aktif olmayan sekmelerde JS timer'larını
+yavaşlatıyor/duraklatıyor. Sekme uzun süre öne getirilmeyince `refresh()` gerçekte tetiklenmiyor, "Ölçüm"
+donuk kalıyor; ama "Uptime" sütunu (`serviceAgeSeconds`) her render'da tarayıcının gerçek `Date.now()`'ıyla
+canlı hesaplandığı için ikisi arasında tutarsızlık oluşuyor.
+
+**Fix:** `OpsConsole.tsx`'e `document.visibilitychange` listener eklendi — sekme tekrar görünür olduğunda
+anında `refresh()` tetikleniyor. Uptime hesaplama mantığına dokunulmadı (zaten doğruydu). Sunucuya `scp` +
+`docker compose up --build -d client` + `restart gateway` ile deploy edildi (git push yapılmadı — sadece
+local commit), derlenen JS bundle'da `visibilitychange` string'i doğrulandı, tam smoke test tekrar geçti.
+
 ---
 
 ## SIRADAKİ ADIM
