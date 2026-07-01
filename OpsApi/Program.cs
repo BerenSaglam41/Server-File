@@ -1,11 +1,22 @@
+using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
+using Npgsql;
 using OpsApi.Endpoints;
 using OpsApi.Infrastructure;
-using System.Text.Json;
+using OpsApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpClient();
+
+// PostgreSQL — ops.audit_events için ayrı şema (yonetim'den bağımsız)
+var connStr = builder.Configuration.GetConnectionString("PlatformDb")!;
+var dataSource = NpgsqlDataSource.Create(connStr);
+builder.Services.AddSingleton(dataSource);
+builder.Services.AddSingleton<OpsAuditService>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -20,7 +31,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateAudience = false,
-            ValidIssuers = new[] { authority, "http://keycloak:8080/realms/platform" },
+            ValidIssuers = [authority, "http://keycloak:8080/realms/platform"],
         };
         options.Events = new JwtBearerEvents
         {
@@ -35,51 +46,49 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization(options =>
 {
-    // Okuma: ops.read veya daha yüksek bir rol
-    options.AddPolicy("ops.read", policy =>
-        policy.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.read", "ops.execute", "ops.admin")));
-
-    // Güvenli write işlemleri (backup tetikleme): ops.execute veya ops.admin
-    options.AddPolicy("ops.execute", policy =>
-        policy.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.execute", "ops.admin")));
-
-    // Yıkıcı işlemler (restore, backup silme): yalnızca ops.admin
-    options.AddPolicy("ops.admin", policy =>
-        policy.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.admin")));
+    options.AddPolicy("ops.read",    p => p.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.read", "ops.execute", "ops.admin")));
+    options.AddPolicy("ops.execute", p => p.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.execute", "ops.admin")));
+    options.AddPolicy("ops.admin",   p => p.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.admin")));
 });
+
+// 403 → 404 dönüşümü: ops rolü olmayan authenticated kullanıcıya /ops/* URL varlığını gizle
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, OpsForbidToNotFoundHandler>();
 
 var app = builder.Build();
 
-// ── Ops Audit Middleware ─────────────────────────────────────────────────────
-// UseAuthentication/UseAuthorization'dan ÖNCE konumlanmalı:
-// Authorization 403/401 döndüğünde short-circuit yapar ve sonraki
-// middleware'leri çağırmaz. Burada olunca pipeline'ı tamamen sararız,
-// 200/401/403 dahil tüm /ops/* istekleri loglanır.
-var auditRoot = builder.Configuration["AUDIT_ROOT"] ?? "/ops/audit";
-Directory.CreateDirectory(auditRoot);
+// ── Ops Audit Middleware ──────────────────────────────────────────────────────
+// UseAuthentication/UseAuthorization'dan ÖNCE — 401/404 dahil tüm /ops/* loglanır
 app.Use(async (ctx, next) =>
 {
+    // Correlation ID — istek boyunca takip edilir, response header'a da eklenir
+    var correlationId = Guid.NewGuid().ToString("N")[..16];
+    ctx.Response.Headers["X-Correlation-Id"] = correlationId;
+
+    var sw = Stopwatch.StartNew();
     await next();
+    sw.Stop();
+
     if (!ctx.Request.Path.StartsWithSegments("/ops")) return;
 
-    var entry = new
+    var status = ctx.Response.StatusCode;
+    var actor  = ctx.User.FindFirst("preferred_username")?.Value ?? "anonymous";
+    var action = OpsAuditService.MapAction(ctx.Request.Method, ctx.Request.Path.Value ?? "");
+
+    var (result, reasonCode) = status switch
     {
-        timestamp = DateTime.UtcNow.ToString("O"),
-        method    = ctx.Request.Method,
-        path      = ctx.Request.Path.Value,
-        status    = ctx.Response.StatusCode,
-        user      = ctx.User.FindFirst("preferred_username")?.Value ?? "anonymous",
-        sub       = ctx.User.FindFirst("sub")?.Value,
-        ip        = ctx.Connection.RemoteIpAddress?.ToString(),
+        401                       => ("denied",  "no_token"),
+        404 when actor == "anonymous" => ("denied", "no_token"),
+        404                       => ("denied",  "ops_role_missing"),
+        >= 200 and < 300          => ("success", (string?)null),
+        _                         => ("error",   $"http_{status}"),
     };
 
-    try
-    {
-        var line = JsonSerializer.Serialize(entry) + "\n";
-        var auditFile = Path.Combine(auditRoot, "ops-audit.jsonl");
-        await File.AppendAllTextAsync(auditFile, line);
-    }
-    catch { /* audit yazılamazsa istek kesilmesin */ }
+    var audit = ctx.RequestServices.GetRequiredService<OpsAuditService>();
+    await audit.WriteAsync(
+        actor, action, result, reasonCode, correlationId,
+        ctx.Connection.RemoteIpAddress?.ToString(),
+        ctx.Request.Path.Value, ctx.Request.Method,
+        (int)sw.ElapsedMilliseconds);
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -103,7 +112,7 @@ static bool HasOpsRole(System.Security.Claims.ClaimsPrincipal user, params strin
         var roleSet = roles.EnumerateArray()
             .Select(r => r.GetString())
             .Where(r => r != null)
-            .ToHashSet();
+            .ToHashSet()!;
         return allowed.Any(a => roleSet.Contains(a));
     }
     catch { return false; }

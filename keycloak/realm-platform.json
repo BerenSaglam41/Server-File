@@ -874,6 +874,24 @@
         "ops.read",
         "ops.admin"
       ]
+    },
+    {
+      "username": "opsuser01",
+      "enabled": true,
+      "firstName": "Ops",
+      "lastName": "User",
+      "email": "opsuser01@platform.internal",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ops456",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "ops.read"
+      ]
     }
   ]
 }

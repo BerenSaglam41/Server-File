@@ -145,6 +145,7 @@ services:
       Keycloak__Authority: "http://localhost:8080/realms/platform"
       Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
       Keycloak__RequireHttpsMetadata: "false"
+      ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
       STATUS_ROOT: "/ops/status-files"
       AUDIT_ROOT: "/ops/audit"
     volumes:
@@ -152,6 +153,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/log/platform-ops:/ops/audit
     depends_on:
+      postgres:
+        condition: service_healthy
       keycloak:
         condition: service_healthy
     networks:

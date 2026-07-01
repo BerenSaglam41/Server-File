@@ -18,6 +18,7 @@ public static class OpsEndpoints
         ops.MapGet("/disk",     GetDisk);
         ops.MapGet("/alerts",   GetAlerts);
         ops.MapGet("/backups",  GetBackups);
+        ops.MapGet("/version",  GetVersion);
     }
 
     // GET /ops/health — her servisin HTTP health endpoint'ini çağırır
@@ -198,6 +199,21 @@ public static class OpsEndpoints
             last_backup   = statusFields.GetValueOrDefault("timestamp"),
             last_status   = statusFields.GetValueOrDefault("status"),
             backups       = dirs,
+        });
+    }
+
+    // GET /ops/version — build bilgileri + environment
+    private static IResult GetVersion()
+    {
+        var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+        return Results.Ok(new
+        {
+            service     = "OpsApi",
+            version     = assembly.GetName().Version?.ToString() ?? "1.0.0",
+            environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production",
+            commit_hash = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown",
+            started_at  = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
+            timestamp   = DateTime.UtcNow,
         });
     }
 
