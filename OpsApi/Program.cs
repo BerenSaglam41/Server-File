@@ -35,21 +35,17 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization(options =>
 {
+    // Okuma: ops.read veya daha yüksek bir rol
     options.AddPolicy("ops.read", policy =>
-        policy.RequireAssertion(ctx =>
-        {
-            if (!ctx.User.Identity?.IsAuthenticated ?? true) return false;
-            var realmAccess = ctx.User.FindFirst("realm_access")?.Value;
-            if (realmAccess == null) return false;
-            try
-            {
-                using var doc = JsonDocument.Parse(realmAccess);
-                if (!doc.RootElement.TryGetProperty("roles", out var roles)) return false;
-                return roles.EnumerateArray()
-                    .Any(r => r.GetString() is "ops.read" or "ops.admin");
-            }
-            catch { return false; }
-        }));
+        policy.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.read", "ops.execute", "ops.admin")));
+
+    // Güvenli write işlemleri (backup tetikleme): ops.execute veya ops.admin
+    options.AddPolicy("ops.execute", policy =>
+        policy.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.execute", "ops.admin")));
+
+    // Yıkıcı işlemler (restore, backup silme): yalnızca ops.admin
+    options.AddPolicy("ops.admin", policy =>
+        policy.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.admin")));
 });
 
 var app = builder.Build();
@@ -57,7 +53,55 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// ── Ops Audit Middleware ─────────────────────────────────────────────────────
+// Tüm /ops/* isteklerini loglar — yonetim.audit_events'tan tamamen bağımsız.
+// Dosya: /ops/status-files/ops-audit.jsonl (bir satır = bir istek)
+var statusRoot = builder.Configuration["STATUS_ROOT"] ?? "/ops/status-files";
+app.Use(async (ctx, next) =>
+{
+    await next();
+    if (!ctx.Request.Path.StartsWithSegments("/ops")) return;
+
+    var entry = new
+    {
+        timestamp = DateTime.UtcNow.ToString("O"),
+        method    = ctx.Request.Method,
+        path      = ctx.Request.Path.Value,
+        status    = ctx.Response.StatusCode,
+        user      = ctx.User.FindFirst("preferred_username")?.Value ?? "anonymous",
+        sub       = ctx.User.FindFirst("sub")?.Value,
+        ip        = ctx.Connection.RemoteIpAddress?.ToString(),
+    };
+
+    try
+    {
+        var line = JsonSerializer.Serialize(entry) + "\n";
+        var auditFile = Path.Combine(statusRoot, "ops-audit.jsonl");
+        await File.AppendAllTextAsync(auditFile, line);
+    }
+    catch { /* audit yazılamazsa istek kesilmesin */ }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "OpsApi" }));
 app.MapOpsEndpoints();
 
 app.Run();
+
+static bool HasOpsRole(System.Security.Claims.ClaimsPrincipal user, params string[] allowed)
+{
+    if (!user.Identity?.IsAuthenticated ?? true) return false;
+    var realmAccess = user.FindFirst("realm_access")?.Value;
+    if (realmAccess == null) return false;
+    try
+    {
+        using var doc = JsonDocument.Parse(realmAccess);
+        if (!doc.RootElement.TryGetProperty("roles", out var roles)) return false;
+        var roleSet = roles.EnumerateArray()
+            .Select(r => r.GetString())
+            .Where(r => r != null)
+            .ToHashSet();
+        return allowed.Any(a => roleSet.Contains(a));
+    }
+    catch { return false; }
+}

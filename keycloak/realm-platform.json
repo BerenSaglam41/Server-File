@@ -35,6 +35,10 @@
       {
         "name": "ops.admin",
         "description": "Ops console tam erişim — backup/restore tetikleme"
+      },
+      {
+        "name": "ops.execute",
+        "description": "Ops güvenli write — backup tetikleme, servis restart"
       }
     ]
   },

@@ -158,7 +158,9 @@ echo "[OK] Sertifikalar hazır"
 # 4. Docker container'ları kaldır
 echo "[..] Docker container'ları rebuild ediliyor..."
 docker compose $COMPOSE_ARGS up --build -d
-echo "[OK] Container'lar ayakta"
+# Rebuild sonrası nginx DNS cache'i bayatlar — gateway restart zorunlu
+docker compose $COMPOSE_ARGS restart gateway
+echo "[OK] Container'lar ayakta, gateway DNS cache yenilendi"
 
 # 5. Fileservice NFS bağlantısını uygula (NFS container başladıktan sonra mount edildiyse)
 echo "[..] Fileservice yeniden başlatılıyor (NFS storage aktif)..."
