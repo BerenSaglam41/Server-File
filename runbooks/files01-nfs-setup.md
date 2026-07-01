@@ -93,8 +93,15 @@ showmount -e localhost
 # Export list for localhost:
 # /srv/files  *
 #
-# Production beklenen:
+# Production beklenen (showmount firewall/NFSv4 ortamında yanıltıcı olabilir):
 # /srv/files  <API_SERVER_IP>
+
+id files-writer
+sudo stat -c '%n -> %U:%G %a %u:%g' \
+  /srv/files/staging \
+  /srv/files/staging/personnel \
+  /srv/files/export \
+  /srv/files/export/personnel
 ```
 
 API sunucusunda:
@@ -103,6 +110,8 @@ API sunucusunda:
 mount | grep platform-files
 nc -vz <FILES_01_IP> 2049
 # Beklenen: succeeded/open
+bash setup-server.sh
+# Beklenen: [OK] Fileservice container staging -> export yazma/taşıma testi geçti
 ```
 
 Mac veya izinsiz başka makinede:
@@ -163,3 +172,6 @@ dosyalara yalnız Gateway → Uygulama API → FileService akışıyla erişilir
 | Mount başarısız (access denied) | `/etc/exports`'u kontrol et, `sudo exportfs -ra` |
 | `probe_not_found` health | `ls /srv/files/export/.probe` — yoksa oluştur |
 | API sunucusu dosyaları görmüyor | Mount'tan sonra `docker compose restart fileservice` |
+| Upload `503 storage_unavailable` | `docker compose logs fileservice`; `Permission denied` varsa `/etc/exports` `all_squash,anonuid=...,anongid=...` mı ve `files-writer` var mı kontrol et |
+| `Access to /app/storage/staging/personnel/<shard> is denied` | Files-01'de `sudo NFS_MODE=production API_SERVER_IP=192.168.64.5 bash setup-files01.sh`; API sunucusunda remount + `bash setup-server.sh` |
+| Host yazabiliyor ama upload patlıyor | Host testi yeterli değildir; container probe (`setup-server.sh`) geçmelidir |

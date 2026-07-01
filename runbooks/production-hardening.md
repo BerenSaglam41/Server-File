@@ -98,19 +98,23 @@ Files-01 production minimum profile alındı:
 
 ```text
 /etc/exports:
-/srv/files 192.168.64.5(rw,sync,no_subtree_check,root_squash)
+/srv/files 192.168.64.5(rw,sync,no_subtree_check,all_squash,anonuid=999,anongid=1003)
 
 exportfs -v:
-/srv/files 192.168.64.5(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,root_squash,no_all_squash)
+/srv/files 192.168.64.5(sync,wdelay,hide,no_subtree_check,anonuid=999,anongid=1003,sec=sys,rw,secure,root_squash,all_squash)
+
+writer:
+uid=999(files-writer) gid=1003(files-publishers)
 
 ufw:
 Default: deny (incoming)
 2049/tcp ALLOW IN 192.168.64.5
 ```
 
-Not: İlk canlı doğrulamada `root_squash` kullanıldı. Upload 503 verince minimum-prod model scriptte
-`all_squash + files-writer` modeline güncellendi; Files-01 üzerinde `setup-files01.sh` tekrar
-çalıştırıldığında export satırı yeni modele döner.
+Not: İlk canlı doğrulamada `root_squash` denenmişti. FileService container upload sırasında
+`/app/storage/staging/personnel/<shard>` dizinini oluşturamayınca `503 storage_unavailable` döndü.
+Final minimum-prod model `all_squash + files-writer` olarak uygulanmıştır. Production'da elle
+`root_squash` satırına dönülmemelidir.
 
 API sunucusu doğrulaması:
 
@@ -118,6 +122,7 @@ API sunucusu doğrulaması:
 nc -vz 192.168.64.3 2049 -> succeeded
 mount -> 192.168.64.3:/srv/files on /mnt/platform-files type nfs4 ... clientaddr=192.168.64.5
 ls /mnt/platform-files/export/.probe -> OK
+bash setup-server.sh -> [OK] Fileservice container staging -> export yazma/taşıma testi geçti
 ```
 
 Mac/izinsiz makine doğrulaması:
@@ -127,6 +132,10 @@ nc -vz -G 3 192.168.64.3 2049 -> Operation timed out
 ```
 
 Sonuç: `*` export kapandı, NFS TCP/2049 yalnız API/FileService sunucusuna açık.
+
+Önemli kabul: host üzerinde `/mnt/platform-files` yazma testi tek başına yeterli değildir. Asıl test
+FileService container içinden `staging/personnel/...` yazma, SHA256 okuma ve `export/personnel/...`
+altına taşıma testidir. `setup-server.sh` bu probe'u çalıştırır ve başarısız olursa kurulumu durdurur.
 
 ## 2. Katı Production Modeli
 
@@ -288,6 +297,14 @@ Restore sonucu:
 Sonraki adım bu komutları systemd timer ve log/alert takibine bağlamaktır.
 
 Restore testi canlı `export/` alanına geri yazmaz; yedeği `restore-tests/<timestamp>/export` altına açar ve `export.sha256` manifestini doğrular.
+
+Mantık:
+
+- `backup-files01.sh`, kalıcı dosyaları `export/` altından kopyalar.
+- `staging/` backup kapsamına alınmaz; burası geçici upload alanıdır.
+- `platformdb.dump`, dosya katalog metadata'sını taşır. Fiziksel dosya ve DB katalog birlikte anlamlıdır.
+- `restore-test.sh`, canlı dosyaları ezmez; hash manifestini ayrı `restore-tests/` altında doğrular.
+- Gerçek disaster restore prosedürü ayrıca hedef storage + PostgreSQL restore sırası ile yapılmalıdır; test script'i canlı geri dönüş değil, yedek bütünlüğü kanıtıdır.
 
 Kuru storage testi veya CI benzeri DB'siz kontrolde `SKIP_DB_DUMP=1` kullanılabilir. Production backup'ta kullanılmamalıdır:
 

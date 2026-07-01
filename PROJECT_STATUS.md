@@ -65,7 +65,7 @@ hardening olarak tut.**
 
 | Başlık | Mevcut durum | Karar | Kapanış kanıtı |
 |---|---|---|---|
-| Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı |
+| Firewall + NFS allowlist | **Tamamlandı/doğrulandı (2026-07-01)** | **Kapandı** | Files-01 `/srv/files` yalnız `192.168.64.5` için export; TCP/2049 yalnız API/FileService hostundan erişiliyor; Mac timeout aldı; FileService container staging→export probe geçti |
 | Secret rotasyonu | Demo secret'lar compose/realm içinde duruyor | **Canlıya çıkmadan önce zorunlu** | Prod deploy gerçek secret'ları env/secret store'dan alıyor; demo kullanıcı/parola prod realm'de yok |
 | Backup/restore otomasyonu | **Canlı backup + restore testi geçti (2026-07-01)** | **Otomasyon/timer kaldı** | `/backup/platform-files/20260701T071527Z` backup oluştu; `platformdb.dump` alındı; restore hash doğrulaması `OK` döndü |
 | Let's Encrypt + gerçek domain | Self-signed HTTPS çalışıyor; kurulum notu var | **Public prod için zorunlu** | `https://domain/health` portsuz 443'ten geçiyor; sertifika zinciri tarayıcı/curl tarafından güvenilir |
@@ -99,10 +99,13 @@ Kanıtlar:
 
 ```text
 Files-01 /etc/exports:
-/srv/files 192.168.64.5(rw,sync,no_subtree_check,root_squash)
+/srv/files 192.168.64.5(rw,sync,no_subtree_check,all_squash,anonuid=999,anongid=1003)
 
 Files-01 exportfs -v:
-/srv/files 192.168.64.5(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,root_squash,no_all_squash)
+/srv/files 192.168.64.5(sync,wdelay,hide,no_subtree_check,anonuid=999,anongid=1003,sec=sys,rw,secure,root_squash,all_squash)
+
+Files-01 writer identity:
+uid=999(files-writer) gid=1003(files-publishers)
 
 Files-01 ufw:
 Default: deny (incoming)
@@ -112,6 +115,7 @@ API sunucusu:
 nc -vz 192.168.64.3 2049 -> succeeded
 mount -> 192.168.64.3:/srv/files on /mnt/platform-files type nfs4 ... clientaddr=192.168.64.5
 ls /mnt/platform-files/export/.probe -> OK
+bash setup-server.sh -> [OK] Fileservice container staging -> export yazma/taşıma testi geçti
 
 Mac / izinsiz makine:
 nc -vz -G 3 192.168.64.3 2049 -> Operation timed out
@@ -136,13 +140,20 @@ storage dizin sahipliğini ayarlar ve export'u şu modele yazar:
 /srv/files <API_SERVER_IP>(rw,sync,no_subtree_check,all_squash,anonuid=<FILES_WRITER_UID>,anongid=<FILES_WRITER_GID>)
 ```
 
-`setup-server.sh` içine FileService container yazma probe'u eklendi:
+Canlı kök neden:
 
-```bash
-docker compose ... exec -T fileservice sh -lc 'tmp=/app/storage/staging/.setup-write-test && echo ok > "$tmp" && rm -f "$tmp"'
+```text
+/srv/files/staging/personnel -> UNKNOWN:dialout 755 501:20
+FileService logu -> Access to the path '/app/storage/staging/personnel/<shard>' is denied.
 ```
 
-Artık API hosttan yazma değil, container içinden staging yazma da setup sırasında doğrulanır.
+Yani `staging/personnel` eski sahibinde kaldığı ve `root_squash` kullanıldığı için container yeni shard
+dizini açamadı. Güncel script `chown -R files-writer:files-publishers` ve `chmod u+rwX,g+rwX,o-rwx`
+uygular.
+
+`setup-server.sh` içine gerçek FileService upload probe'u eklendi: `staging/personnel/...` yazma,
+SHA256 okuma, `export/personnel/...` altına `mv`, export dosyasını doğrulama ve temizleme. Artık API
+hosttan yazma değil, container içinden gerçek staging→export akışı setup sırasında doğrulanır.
 
 ### 2026-07-01 canlı backup/restore doğrulaması
 
@@ -205,7 +216,8 @@ dosya-sistemi-projesi/
   │     └── nginx.conf                 <- Gateway routing: /api/personnel→yonetimapi, /api/vehicles→flotaapi
   ├── runbooks/
   │     ├── files01-nfs-setup.md               <- NFS kurulum runbook (üretim adımları)
-  │     └── files01-nfs-kurulum-notlari.md     <- UTM VM kurulum oturumu notları
+  │     ├── production-hardening.md            <- Production hardening, NFS allowlist, backup/restore
+  │     └── observability-plan.md              <- Request id, metrics, tracing, dashboard planı
   ├── tools/
   │     └── migrate-legacy-files.py    <- Legacy dosya migration aracı
   ├── FileServiceApi/                  <- .NET minimal API, mTLS HTTPS:8080 (iç ağ)
@@ -495,14 +507,21 @@ UTM/test profilinde Mac mount kolaylığı bilinçli olarak açılabilir.
 
 **Topoloji:**
 - **files-01** (192.168.64.3): NFS sunucusu — `/srv/files` export eder
-- **Mac**: `/Volumes/platform-files` → NFS → `/srv/files`
 - **API sunucusu** (192.168.64.5): `/mnt/platform-files` → NFS → `/srv/files`
 - Container içi: `/app/storage` → host mount noktası → `/srv/files`
+- **Mac / browser**: production minimumda NFS'e bağlanmaz; yalnız Gateway (`https://192.168.64.5:5090`) üzerinden erişir
+
+**Production export modeli:**
+
+```exports
+/srv/files 192.168.64.5(rw,sync,no_subtree_check,all_squash,anonuid=<files-writer>,anongid=<files-publishers>)
+```
 
 **Bilinen kısıt:**
-- Mac'te NFS mount reboot'ta kaybolur — `sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files && docker compose restart fileservice` ile yeniden bağla
+- Mac NFS mount yalnız `NFS_MODE=test` profilinde geçerlidir. Production minimumda Mac mount denemesi
+  `access denied` veya timeout ile başarısız olmalıdır.
 
-Detay: `runbooks/files01-nfs-kurulum-notlari.md`
+Detay: `runbooks/files01-nfs-setup.md` ve `runbooks/production-hardening.md`
 
 ## NOT YAPILANLAR (kasıtlı kapsam dışı bırakılan)
 - **ETag / If-None-Match — YonetimApi tarafında**: YonetimApi kendi ETag'ını üretmiyor;
@@ -606,7 +625,8 @@ Her iki check geçerse HTTP 200, herhangi biri çökerse HTTP 503 + hangi compon
 {"status":"unhealthy","service":"FileServiceApi","checks":{"storage":{"status":"unhealthy","reason":"probe_not_found"},"database":{"status":"healthy"}}}
 ```
 
-NFS entegrasyonu tamamlandı — bkz. "Files-01 NFS Entegrasyonu" bölümü ve `runbooks/files01-nfs-kurulum-notlari.md`.
+NFS entegrasyonu tamamlandı — bkz. "Files-01 NFS Entegrasyonu" bölümü,
+`runbooks/files01-nfs-setup.md` ve `runbooks/production-hardening.md`.
 
 Test: H1 (normal → 200) ✅, H2 (storage down → 503) ✅, H3 (restore → 200) ✅
 
@@ -1404,20 +1424,26 @@ LIMIT 5;
 
 ## Çoklu Ortam Desteği — Mac + API Sunucusu (TAMAMLANDI ✅ — 2026-06-30)
 
+Not: Bu bölüm geliştirme/test kolaylığını anlatır. Güncel minimum production profilde Mac Files-01'i
+NFS ile mount etmez; Mac yalnız tarayıcı olarak Gateway'e gider. Files-01 NFS export'u yalnız
+API/FileService sunucusuna açıktır.
+
 ### Topoloji
 
 ```
 files-01 (192.168.64.3)
-  /srv/files  ─NFS─▶  Mac: /Volumes/platform-files
-              ─NFS─▶  API sunucusu (192.168.64.5): /mnt/platform-files
+  /srv/files  ─NFS─▶  API sunucusu (192.168.64.5): /mnt/platform-files
+              ─X─▶   Mac / başka VM (production minimumda timeout/access denied)
 
-Mac (tarayıcı + geliştirme)
-  docker compose → localhost:5090
-  → gateway → yonetimapi, fileservice, keycloak, postgres
+Mac (production minimum)
+  tarayıcı → https://192.168.64.5:5090 → gateway → yonetimapi/fileservice
 
 API sunucusu (192.168.64.5)
   docker compose → 192.168.64.5:5090
   → gateway → yonetimapi, fileservice, keycloak, postgres
+
+Mac (yalnız UTM/test profili)
+  NFS_MODE=test ile /Volumes/platform-files mount edilebilir
 ```
 
 ### Yapılan değişiklikler
@@ -1635,19 +1661,22 @@ Tarayıcıda: `https://localhost:5090` → uyarıyı kabul et → login çalış
 
 ## SIRADAKİ ADIM
 
-- **Production hardening**: `runbooks/production-hardening.md` eklendi. NFS `*` export sadece UTM/test kabul edilir; prod minimumda `/srv/files <API_SERVER_IP>(rw,...)` ve firewall TCP/2049 allowlist gerekir. Files-01 için `tools/configure-files01-nfs.sh` eklendi (`NFS_MODE=production API_SERVER_IP=...`). Katı modelde runtime export'u read-only, publish/staging ayrı kontrollü süreç olur.
-- **Backup + Restore**: `tools/backup-files01.sh` (rsync export/ + pg_dump) + `tools/restore-test.sh` (hash doğrulama). `restore-tests/` dizini boş.
-- **Upload storage debug**: FileService `storage_write_failed` durumunda artık exception detayını
-  container loguna yazar. `setup-server.sh` basit staging yazma yerine gerçek upload yolunu
-  doğrular: `staging/personnel/...` yazma → SHA256 okuma → `export/personnel/...` içine `mv`.
-  Bu test geçmezse setup durur; geçer ama upload 503 dönerse sebep `fileservice` logunda
-  net exception olarak aranır.
+- **Backup/restore otomasyonu**: Tek seferlik canlı backup ve restore testi geçti. Sıradaki iş bunu
+  systemd timer, log retention ve alarm kuralına bağlamak.
+- **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
+  store üzerinden yönetilmeli.
+- **Let's Encrypt + gerçek domain**: İç ağ self-signed HTTPS çalışıyor. Public prod için gerçek domain,
+  443 ve güvenilir sertifika zinciri tamamlanmalı.
+- **Observability Faz 1**: Request id/correlation standardı, structured logs ve temel metrics eklenmeli;
+  sonra Prometheus/Grafana/tracing kurulmalı.
 - **API hata sözlüğü tutarlılığı**: FileService tarafında bazı durumlar teknik olarak `result=denied`
   audit edilirken YonetimApi/client upload cevabında `error` alanı daha genel kalabiliyor. Production
   polish için FileService `reason_code` değerleri (`data_scope_denied`, `policy_denied`,
   `unsupported_media_type`, `storage_unavailable`, `duplicate_file` vb.) YonetimApi response body'lerinde
   ve client mesajlarında aynı sözlükle taşınmalı. Bu davranış güvenlik açığı değil; destek, debug ve
   kullanıcı mesajı tutarlılığı için RC sonrası kapatılacak kalite işi.
+- **Strict NFS ro/publisher modeli**: Minimum production için şart değil; V2 hardening olarak tutuluyor.
+  Bu modele geçilirse FileService runtime NFS'e yazmaz, staging/publish ayrı kontrollü sürece taşınır.
 - **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
 - **Sertifika rotasyonu**: `certs/generate-certs.sh` artık mevcut CA/sertifikaları varsayılan olarak ezmez; `FORCE_REGENERATE_CERTS=1` bilinçli rotasyon içindir. Gateway SAN değerleri `GATEWAY_DNS`/`GATEWAY_IPS` ile parametrelenir. Prod'da CA rotasyonu ayrı prosedürle yapılmalı.
 - **Fleet vehicle araması**: FlotaApi'ye `GET /api/vehicles?search=` endpoint'i eklenirse Dashboard'a araç listesi sidebar'ı eklenebilir (şu an yoktur — V2 adayı).

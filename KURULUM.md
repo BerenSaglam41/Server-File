@@ -63,9 +63,10 @@ Scriptin yazdığı export modeli:
 ```bash
 cat /etc/exports
 sudo exportfs -v
-showmount -e localhost
-# UTM/test beklenen: /srv/files  *
-# Production beklenen: /srv/files  <API_SERVER_IP>
+id files-writer
+
+# Production beklenen export modeli:
+# /srv/files <API_SERVER_IP>(rw,sync,no_subtree_check,all_squash,anonuid=...,anongid=...)
 ```
 
 API sunucusunda:
@@ -73,6 +74,8 @@ API sunucusunda:
 ```bash
 mount | grep platform-files
 nc -vz <FILES_01_IP> 2049
+bash setup-server.sh
+# Beklenen: [OK] Fileservice container staging -> export yazma/taşıma testi geçti
 ```
 
 Mac/izinsiz makinede production beklenen:
@@ -323,8 +326,9 @@ files-01 (192.168.64.3)
     export/     ← ReadPath + ExportPath
     staging/    ← StagingPath
 
-Mac:            /Volumes/platform-files  → (NFS) → /srv/files
 API sunucusu:   /mnt/platform-files      → (NFS) → /srv/files
+Mac:            production minimumda NFS'e bağlanmaz; yalnız Gateway'i kullanır
+                UTM/test profilinde /Volumes/platform-files mount edilebilir
 
 Container içi:  /app/storage             = mount noktası
   /app/storage/export    = ReadPath + ExportPath
@@ -338,9 +342,14 @@ Container içi:  /app/storage             = mount noktası
 Production'a geçmeden önce şu kapılar tamamlanmalı:
 
 - NFS export `*` içermemeli; yalnız API sunucusu IP'si allowlist edilmeli.
+- Production minimum export `root_squash` yerine `all_squash + files-writer` kullanmalı; aksi halde
+  container upload sırasında `Permission denied` / `503 storage_unavailable` görülebilir.
 - Files-01 firewall TCP/2049'u yalnız API sunucusuna açmalı.
 - Mac/başka VM üzerinden NFS mount denemesi `access denied` veya timeout ile başarısız olmalı.
+- API sunucusunda `setup-server.sh` gerçek upload yolunu doğrulamalı:
+  `staging/personnel/...` yazma → SHA256 okuma → `export/personnel/...` içine taşıma.
 - `staging` geçici, `export` kalıcı/backup kapsamı olarak ayrılmalı.
+- Backup/restore canlıda test edildi; production için systemd timer + alarm ile düzenli hale getirilmeli.
 - `certs/generate-certs.sh` kazara CA yenilemeyecek şekilde kullanılmalı; CA rotasyonu planlı yapılmalı.
 - `appsettings.json` dosyalarındaki local değerlerin fallback olduğu bilinmeli; production config `docker compose config` ve container env çıktısıyla doğrulanmalı.
 
@@ -409,17 +418,18 @@ docker exec -i $(docker ps -qf name=postgres) psql -U platform -d platformdb \
 
 **NFS mount yok:**
 ```bash
-# Mac:
+# Mac (yalnız UTM/test profili):
 sudo mount -t nfs -o resvport 192.168.64.3:/srv/files /Volumes/platform-files
 docker compose restart fileservice
 
 # API sunucusu:
 sudo mount -t nfs 192.168.64.3:/srv/files /mnt/platform-files
-docker compose restart fileservice
+bash setup-server.sh
 ```
 
 **files-01 erişilemiyor:**
 ```bash
 ping 192.168.64.3
-showmount -e 192.168.64.3
+nc -vz 192.168.64.3 2049
+# showmount production/firewall/NFSv4 ortamında yanıltıcı olabilir; asıl kabul mount + probe testidir.
 ```

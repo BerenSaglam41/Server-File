@@ -49,6 +49,9 @@ logs/
 .env.local
 .env.*.local
 
+# Resmi proje brief dosyaları — referans olarak kalır, yeni eklenenler commit edilmez
+PROJE/
+
 # JetBrains / VS Code
 .idea/
 *.iml
