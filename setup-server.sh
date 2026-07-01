@@ -39,7 +39,21 @@ if [ "$NFS_MODE" = "production" ]; then
         exit 1
     fi
 
-    EXPORTS_OUTPUT="$(showmount -e "$FILES_01_IP" 2>/dev/null || true)"
+    if command -v nc >/dev/null 2>&1; then
+        if ! nc -z -w 3 "$FILES_01_IP" 2049; then
+            echo "[HATA] Files-01 NFS portuna erişilemiyor: $FILES_01_IP:2049"
+            exit 1
+        fi
+        echo "[OK] Files-01 NFS portu erişilebilir ($FILES_01_IP:2049)"
+    fi
+
+    if command -v timeout >/dev/null 2>&1; then
+        EXPORTS_OUTPUT="$(timeout 5 showmount -e "$FILES_01_IP" 2>/dev/null || true)"
+    else
+        echo "[UYARI] timeout komutu yok; showmount kontrolü atlandı, mount + probe kontrolüyle devam edilecek."
+        EXPORTS_OUTPUT=""
+    fi
+
     if echo "$EXPORTS_OUTPUT" | grep -E "^[[:space:]]*$NFS_EXPORT[[:space:]]+\\*" >/dev/null; then
         echo "[HATA] Files-01 production için güvenli değil: $NFS_EXPORT hala '*' olarak export ediliyor."
         echo "Önce Files-01 üzerinde çalıştır:"
