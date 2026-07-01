@@ -98,6 +98,8 @@ echo "[OK] PostgreSQL restore tamamlandı"
 # 4. Servisleri yeniden başlat
 echo "[..] Servisler yeniden başlatılıyor..."
 docker compose -f "$COMPOSE_FILE" start fileservice yonetimapi flotaapi
+# Gateway'i de yeniden başlat: stop/start sonrası nginx DNS cache'i stale kalır
+docker compose -f "$COMPOSE_FILE" restart gateway
 echo "[OK] Servisler başlatıldı"
 
 # 5. Health check
