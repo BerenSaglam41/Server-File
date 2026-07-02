@@ -149,28 +149,97 @@ karşılaştırıldı) **birebir aynı** çıktı. **Evet, doğru.**
 
 ### 6. `/files/download` için rate limit var mı?
 
-`nginx.conf`'ta `limit_req`/`limit_conn` **hiç yok** — ne `/files/download/` için ne genel olarak.
-**Hayır, rate limit yok.** Bu gerçek bir eksik: bir istemci, geçerli bir ticket'ı `MaxUsesPerTicket`
-sınırına kadar (20) çok hızlı art arda tüketebilir veya (RBAC'tan geçebiliyorsa) art arda çok sayıda
-ticket oluşturup tüketebilir — hiçbir Gateway seviyesi throttling yok. Ticket'ın kendi doğal sınırları
-(kısa ömür, RBAC gereksinimi, max-uses) kısmi bir koruma sağlıyor ama bu, IP/endpoint bazlı rate limit'in
-yerini tutmuyor. **Düzeltilmedi, V2 adayı olarak not edildi.**
+`nginx.conf`'ta `limit_req`/`limit_conn` **hiç yoktu** — ne `/files/download/` için ne genel olarak.
+**⚠️ SONRADAN DÜZELTİLDİ (2026-07-02) — bkz. aşağıdaki "Rate Limit ve Log Maskeleme Düzeltmeleri" bölümü.**
 
 ### 7. Gateway access log'da ticket açık yazılıyor mu?
 
 ```
 172.18.0.1 - - [02/Jul/2026:13:07:36 +0000] "GET /files/download/YSulm825tOZead6H5OoK8-7Y9jbOp8-hrdkPbCjqERs HTTP/1.1" 200 110567 "-" "curl/8.18.0"
 ```
-**Evet — ham ticket değeri access log'da düz metin olarak görünüyor** (`docker logs
-server-file-gateway-1`). DB'de sadece hash tutulsa da, URL path olarak taşındığı için access log'a
-kaçınılmaz şekilde yazılıyor. Bu, S3 presigned URL gibi query-string/path tabanlı imzalı link
-sistemlerinin **endüstri genelinde kabul edilen, bilinen bir tradeoff'u** — kısa ömür (60sn+lease) ve dar
-kapsam (tek dosya, RBAC sonrası) riski sınırlıyor ama sıfırlamıyor. **Düzeltilmedi, bilinen ve kabul
-edilebilir bir tradeoff olarak not edildi** (istenirse log'da ticket'ı maskeleyen bir nginx `map`/`log_format`
-ayarı V2'de eklenebilir).
+**Evet — ham ticket değeri access log'da düz metin olarak görünüyordu** (`docker logs
+server-file-gateway-1`). **⚠️ SONRADAN DÜZELTİLDİ (2026-07-02) — bkz. aşağıdaki "Rate Limit ve Log
+Maskeleme Düzeltmeleri" bölümü.**
 
-### Genel Sonuç
+### Genel Sonuç (o anki durum)
 
-Sorular 1-5: **tümü doğrulandı, sistem tasarlandığı gibi çalışıyor.** Sorular 6-7: **iki gerçek, düzeltilmemiş
-gözlem** — rate limit yok, ticket access log'da açık yazılıyor. İkisi de düzeltilmedi (kullanıcıya bildirildi,
-V2 adayı olarak işaretlendi).
+Sorular 1-5: tümü doğrulandı, sistem tasarlandığı gibi çalışıyor. Sorular 6-7: iki gerçek, o an
+düzeltilmemiş gözlem — rate limit yok, ticket access log'da açık yazılıyor. Kullanıcıya bildirildi, hemen
+ardından ikisi de düzeltildi (aşağıya bakın).
+
+---
+
+## Rate Limit ve Log Maskeleme Düzeltmeleri (TAMAMLANDI ✅ — 2026-07-02)
+
+### Rate Limit
+
+`nginx.conf`'a `/files/download/` için IP başına rate limit eklendi:
+```nginx
+limit_req_zone $binary_remote_addr zone=download_limit:10m rate=30r/s;
+limit_req_status 429;
+...
+location ~ ^/files/download/(?<ticket>[A-Za-z0-9_-]+)$ {
+    limit_req zone=download_limit burst=50 nodelay;
+    ...
+}
+```
+`burst=50` seçildi çünkü gerçek testlerimizin en yoğunu (25 eşzamanlı istek) bunun rahatça altında kalıyor
+— test yaparken kendimizi engellemeden, gerçek kötüye kullanımı (saniyede yüzlerce istek) sınırlıyor.
+Aşılırsa `429` + `{"error":"too_many_requests","reason":"rate_limited"}` JSON body (mevcut
+`error_page`/`@upstream_down` desenine uygun yeni bir `@rate_limited` handler'ı eklendi).
+
+**Test 1 — Rate limit gerçekten devrede mi:** 120 eşzamanlı istek (sahte ticket'larla, saf throttle testi)
+→ **57×429, 63×404** — limit gerçekten tetikleniyor.
+
+**Test 2 — Gerçek kullanım senaryomuzu engellemiyor mu:** 25 eşzamanlı istek (gerçek, geçerli tek ticket'a,
+lease/max-uses testindeki gibi) → **tam olarak `20×200, 5×404`** — rate limit hiç araya girmedi, sonuç
+öncekiyle birebir aynı.
+
+### Log Maskeleme
+
+**Bulunan ek bir gerçek sorun (düzeltme sırasında keşfedildi):** İlk denemede `access_log` ve custom
+`log_format`'ı `/files/download/{ticket}` location'ına eklememe rağmen ticket **hâlâ maskelenmeden**
+log'a yazılıyordu. Kök neden: X-Accel-Redirect ile **başarılı (200/206/304)** yanıtlar aslında
+`/protected-download/` (internal) location'ında finalize ediliyor — orijinal location'daki
+`access_log`/`add_header` gibi response-seviyesi direktifler bu durumda **hiç uygulanmıyor**. Bu, bir
+debug header (`add_header X-Debug-Ticket-Masked`) ile ampirik olarak doğrulandı: header sadece
+`/protected-download/` location'ına eklendiğinde görünür oldu.
+
+**Düzeltme:** Maskeli `access_log` her iki location'a da eklendi — `/files/download/` (X-Accel
+tetiklenmeyen 403/404/429 yanıtları için) ve `/protected-download/` (başarılı X-Accel yanıtları için,
+asıl önemli olan). `$ticket` named-capture'ının `/protected-download/`'a internal redirect sonrası da
+erişilebilir kaldığı doğrulandı.
+
+```nginx
+map $ticket $ticket_masked {
+    "~^(.{8})" "$1...";
+    default    "(yok)";
+}
+log_format download_masked
+    '$remote_addr - - [$time_local] "$request_method /files/download/$ticket_masked '
+    '$server_protocol" $status $body_bytes_sent "$http_referer" "$http_user_agent"';
+```
+
+**Test — Maskeleme gerçekten çalışıyor mu:** Gerçek ticket `2m5chPOWV13BGfAXeL86ALZEyQjcyqk9PhOptVjZVvk`
+ile indirme yapıldı. Log çıktısı:
+```
+"GET /files/download/2m5chPOW... HTTP/1.1" 200 110567 "-" "curl/8.18.0"
+```
+Sadece ilk 8 karakter (`2m5chPOW`) görünüyor, tam ticket log'da **hiç yok**. 20 eşzamanlı başarılı isteğin
+tamamı da doğru maskelendiği doğrulandı (hepsi aynı ticket'ın ilk 8 karakteriyle, `yPaxrd3F...`).
+
+**Küçük bir formatting hatası da bulunup düzeltildi:** İlk denemede log satırında `"HTTP/HTTP/1.1"`
+(mükerrer yazım) görüldü — `log_format` string'inde `$server_protocol` zaten `"HTTP/1.1"` döndürdüğü
+için önüne ayrıca `"HTTP/"` eklemek gereksizdi. Düzeltildi, tekrar test edildi: `"HTTP/1.1"` (doğru).
+
+### Regresyon
+
+`tools/server-smoke-test.sh` (23/23), `tools/server-safe-test-suite.sh` (tüm senaryolar), `platform-backup.service`
+(+ otomatik restore-test) — hepsi düzeltmeler sonrası tekrar çalıştırıldı, regresyonsuz.
+
+### Kalan, Bilinçli Kabul Edilen Sınır
+
+Log'da ticket'ın **ilk 8 karakteri** hâlâ görünüyor (tamamen sıfır değil) — bu, temel ops
+görünürlüğü/debugging için bilinçli bir denge (tamamen `"(yok)"` yazmak yerine, "bu ticket'a ait bir
+istek oldu mu" sorusuna en azından kısmi cevap veriyor). 8 karakter, 256-bit'lik ticket'ın çok küçük bir
+kısmı (~48 bit) olduğu için brute-force/yeniden oluşturma riski taşımıyor.

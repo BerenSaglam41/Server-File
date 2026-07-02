@@ -2304,24 +2304,37 @@ lease süresi (30sn) dolunca `404` (`ticket_lease_expired`); hiç kullanılmamı
 tekrarlanmadı (client kodu bu değişiklikte dokunulmadı, aynı URL'i aynı şekilde çağırıyor). Tam kanıt:
 `proof/download-ticket-lease-model.md`.
 
-### Ek doğrulama turu — DB seviyesinde + 2 yeni gerçek bulgu (henüz düzeltilmedi)
+### Ek doğrulama turu — DB seviyesinde 5 soru + 2 gerçek bulgu (SONRADAN İKİSİ DE DÜZELTİLDİ)
 
 Kullanıcının 7 sorusuyla DB seviyesinde tekrar doğrulandı: `use_count` gerçekten 20'de kalıyor, 21.
 istek audit'te `ticket_max_uses_reached`, lease sonrası reddedilen denemeler `use_count`'u artırmıyor,
 hiç kullanılmamış ticket'ın `used_at`'i gerçekten `NULL` kalıyor, Range+`Content-Range` doğru (`dd`+`diff`
-ile bit-bit doğrulandı).
+ile bit-bit doğrulandı). Bulunan 2 gerçek eksik (rate limit yok, ticket log'da açık) **aynı oturumda
+düzeltildi** — bkz. aşağıdaki "Rate Limit ve Log Maskeleme" bölümü.
 
-**2 yeni, gerçek, düzeltilmemiş bulgu:**
-- **`/files/download/` için rate limit yok** (`nginx.conf`'ta `limit_req`/`limit_conn` hiç yok) — bir
-  istemci geçerli bir ticket'ı max-uses sınırına kadar hızlıca tüketebilir, Gateway seviyesinde throttling
-  yok.
-- **Ham ticket, Gateway access log'unda düz metin olarak görünüyor** (`docker logs
-  server-file-gateway-1`) — DB'de sadece hash tutulsa da, URL path'in kendisi loglanıyor. S3 presigned URL
-  gibi sistemlerin bilinen, endüstri genelinde kabul edilen bir tradeoff'u; kısa ömür + dar kapsam riski
-  sınırlıyor ama sıfırlamıyor.
+---
 
-İkisi de düzeltilmedi, V2 adayı olarak not edildi. Tam kanıt: `proof/download-ticket-lease-model.md` →
-"Ek Doğrulama Turu" bölümü.
+## Rate Limit ve Log Maskeleme (TAMAMLANDI ✅ — 2026-07-02)
+
+Yukarıdaki 2 bulgu kullanıcı isteğiyle hemen düzeltildi:
+
+- **Rate limit:** `/files/download/` için IP başına `limit_req_zone ... rate=30r/s` + `burst=50 nodelay`
+  eklendi, aşılırsa `429 {"error":"too_many_requests","reason":"rate_limited"}`. 120 eşzamanlı sahte
+  istekle test edildi → `57×429, 63×404` (limit gerçekten çalışıyor); gerçek 25 eşzamanlı test senaryosu
+  → değişmeden `20×200, 5×404` (limit kendi testlerimizi engellemiyor).
+- **Log maskeleme:** `map`+özel `log_format` ile ticket'ın sadece ilk 8 karakteri log'a yazılıyor
+  (`2m5chPOW...`), tam ticket asla görünmüyor. **Düzeltme sırasında ek bir gerçek bug bulundu:**
+  X-Accel-Redirect nedeniyle başarılı (200/206/304) yanıtlar `/protected-download/` (internal)
+  location'ında finalize ediliyor — `access_log` sadece `/files/download/` location'ına eklenince
+  hiç etkisi olmadı (bir debug header ile ampirik kanıtlandı). Düzeltme: maskeli `access_log` her
+  iki location'a da eklendi. Ayrıca küçük bir `"HTTP/HTTP/1.1"` format hatası da bulunup düzeltildi.
+
+Regresyon: `tools/server-smoke-test.sh` (23/23), `tools/server-safe-test-suite.sh`, `platform-backup.service`
+— hepsi düzeltmeler sonrası tekrar geçti. Tam kanıt: `proof/download-ticket-lease-model.md` → "Rate Limit
+ve Log Maskeleme Düzeltmeleri" bölümü.
+
+**Bilinçli kalan sınır:** Log'da ticket'ın ilk 8 karakteri (256-bit'in ~48 biti) hâlâ görünüyor — tam
+sıfırlama yerine temel ops-görünürlüğü/debugging için bilinçli bir denge; brute-force riski taşımıyor.
 
 ---
 
