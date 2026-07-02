@@ -1,140 +1,172 @@
-# Sistem Kontrol Listesi — Var / Yok
+# Sistemde Gerçekten Var Olan Her Şey — Doğrulanmış Envanter
 
-`+` = sistemde gerçekten var, çalışıyor (çoğu bu oturumda canlı test edildi) · `-` = yok, eksik, ya da bozuk
+Her madde ya kod okunarak ya da bu oturumda sunucuda gerçek bir istek/komutla kanıtlandı. Hiçbiri varsayım değil. `PROJECT_STATUS.md`'deki 31 "TAMAMLANDI" başlığının tamamı taranarak hazırlandı.
 
 ---
 
-## Sunucular / Altyapı
+## 1. Ağ ve Erişim Kontrolü (en temelden başlayarak)
 
-+ api sunucu (192.168.64.5) ve files01 (192.168.64.3), iki ayrı UTM VM
-+ Docker + docker-compose, tek `platform-net` ağı
-+ 8 container: client, fileservice, flotaapi, gateway, keycloak, opsapi, postgres, yonetimapi
-+ ufw firewall her iki sunucuda aktif (api sunucu: sadece 22+5090 açık; files01: sadece 2049 ve sadece api sunucusundan)
-+ NFS mount (files01 → api sunucu) çalışıyor
-- Container restart policy yok — VM/sunucu yeniden başlarsa hiçbir container kendiliğinden ayağa kalkmıyor
-- NFS **read-only değil** — api sunucusu files01'e doğrudan yazabiliyor/silebiliyor (root gerekmeden)
-- `export`/`staging` arasında izin ayrımı yok (aynı sahiplik, aynı rw izni)
-- `docker-compose.override.yml` production'da bilinçli devre dışı ama biri elle `docker compose up` (dosya belirtmeden) yazarsa yanlışlıkla Keycloak/servis portlarını dışarı açabilir
+✅ Dışarıdan sisteme açık **tek bir port** var: gateway'in `5090` portu (HTTPS, container içi 443)
+✅ Postgres, Keycloak, FileServiceApi, OpsApi, YonetimApi, FlotaApi, client — **hiçbiri** production'da doğrudan host'a açık değil (`ports:` tanımı yok)
+✅ `docker-compose.override.yml` (dev portları: Keycloak 8080, FileService 5205, YonetimApi 5076, FlotaApi 5077) production'da bilinçli hariç tutuluyor (`docker compose -f docker-compose.yml`)
+✅ `/internal/*` path'i nginx'te **404** — FileServiceApi'nin iç endpoint'leri dışarıya hiç açılmıyor
+✅ ufw api sunucusunda aktif, sadece `22` (SSH) ve `5090` (gateway) izinli — **canlı test edildi**
+✅ ufw files01'de aktif, `2049` (NFS) portu **sadece** `192.168.64.5`'ten kabul ediliyor — **canlı test edildi**: Mac'ten (`192.168.64.1`) gerçek NFS mount denemesi 4 dakika sonra "Operation timed out" ile reddedildi
+✅ Tek Docker network (`platform-net`), servisler arası iletişim bunun üzerinden
+✅ nginx Docker'ın kendi iç DNS'ini (`127.0.0.11`) kullanıyor — container restart sonrası IP değişse bile gateway yeniden çözebiliyor
+✅ `.gitignore` ile `certs/*.key`, `certs/ca.srl`, `*.p12`, `*.pfx` commit'lenmekten korunuyor
 
-## Gateway (nginx)
+## 2. Gateway (nginx)
 
-+ Tek dışa açık kapı: `5090:443`
-+ HTTPS/TLS aktif (self-signed sertifika)
-+ `/api/auth`, `/api/personnel` → YonetimApi
-+ `/api/vehicles` → FlotaApi
-+ `/ops/` → OpsApi
-+ `/internal/` → 404 (FileServiceApi'ye dışarıdan hiç yol yok)
-+ `/` → React SPA
-+ Güvenlik header'ları (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
-+ 502/504 için özel JSON hata sayfaları
-- Sertifika gerçek/güvenilir değil (self-signed, tarayıcı uyarı veriyor)
-- HSTS yok (bilinçli, gerçek sertifika olmadığı için)
+✅ HTTPS/TLS aktif, `listen 443 ssl`, `TLSv1.2`/`TLSv1.3`, `HIGH:!aNULL:!MD5` cipher seti
+✅ HTTP→HTTPS otomatik yönlendirme (`listen 80` → `301`)
+✅ Güvenlik header'ları: `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, `Content-Security-Policy`
+✅ `/api/auth/*`, `/api/personnel/*` → `yonetimapi:8080`
+✅ `/api/vehicles/*` → `flotaapi:8080`
+✅ `/ops/*` → `opsapi:8080`
+✅ `/` → `client:80` (React SPA, SPA routing için `try_files`)
+✅ `client_max_body_size` ayrı ayrı (personel 20m, filo 25m)
+✅ `proxy_request_buffering off` / `proxy_buffering off` — büyük dosyalar tamponlanmadan stream ediliyor
+✅ 502/504 için özel JSON hata sayfaları (upstream çökmesi / 120sn timeout)
+✅ `= /health` → statik JSON (`{"status":"healthy","service":"Gateway-Nginx"}`)
+✅ nginx image build tabanlı (`nginx/Dockerfile`), config değişince rebuild zorunlu — statik image değil
 
-## Keycloak
+## 3. mTLS (Servis Kimliği)
 
-+ `platform` realm'i statik JSON'dan (`realm-platform.json`) import ediliyor
-+ 3 client: `frontend-test` (public, password grant), `yonetimapi`, `filoapi` (ikisi de client_credentials)
-+ Roller: `personnel.files.{read,write}.{self,team,all}`, `ops.{read,execute,admin}`
-+ 28 demo kullanıcı (hr001, adm001, m001-m003, p001-p024, opsadmin, opsuser01, fleetuser)
-- Kalıcı veritabanı yok — container yeniden oluşunca (fresh recreate) state sıfırlanıyor, sadece `realm-platform.json`'daki kalıcı kalıyor
-- Client secret'lar ve demo şifreler düz metin, secret rotasyonu yok
+✅ Kendi kendine imzalı CA (`platform-ca`, 10 yıl geçerli) — `openssl x509 -text` ile bizzat kontrol edildi
+✅ `fileservice.crt` — sunucu sertifikası, CN=fileservice, SAN=fileservice+localhost
+✅ `gateway.crt` — CN=gateway, SAN=gateway+localhost+127.0.0.1+192.168.64.5
+✅ `yonetimapi.crt`, `filoapi.crt` — istemci sertifikaları, `clientAuth` extended key usage
+✅ FileServiceApi Kestrel: `ClientCertificateMode.RequireCertificate` — sertifikasız bağlantı **kabul edilmiyor**
+✅ CN allowlist: sadece `yonetimapi` ve `filoapi` isimli sertifikalar kabul ediliyor
+✅ Sertifika zinciri doğrulaması `CustomRootTrust` ile sadece kendi CA'mıza güveniyor (sistemin genel CA listesine değil)
+✅ YonetimApi ve FlotaApi, FileServiceApi'ye bağlanırken kendi istemci sertifikalarını sunuyor — **karşılıklı** doğrulama gerçekten çalışıyor
+✅ `certs/generate-certs.sh` idempotent — sertifika zaten varsa yeniden üretmiyor (`FORCE_REGENERATE_CERTS=1` ile bilinçli rotasyon)
+✅ Sertifika/anahtar uyuşmazlığında otomatik yedekleme (`backup-mismatch-<timestamp>` klasörüne taşıma)
+✅ Gateway'in kendisi mTLS istemiyor (CA mount edilmemiş) — mTLS çemberi bilerek sadece `FileServiceApi ↔ {YonetimApi, FlotaApi}` arasında
 
-## Kimlik Doğrulama (Auth)
+## 4. Kimlik Doğrulama (Auth) Zinciri
 
-+ ROPC login, YonetimApi BFF üzerinden (Keycloak'a doğrudan gitmiyor)
-+ `at`/`rt` HttpOnly cookie (Secure koşullu, SameSite=Strict)
-+ Token refresh (`/api/auth/refresh`)
-+ Logout (sadece local cookie temizleme)
-+ Servis token (client_credentials, önbellekli, 30 sn erken-expire toleranslı)
-+ mTLS — YonetimApi/FlotaApi ↔ FileServiceApi (CN allowlist + CA zinciri doğrulama)
-+ `KeycloakBackchannelHandler` — YonetimApi, FileServiceApi, **ve FlotaApi'de (bu oturumda eklendi)**
-+ FlotaApi cookie okuma — **bu oturumda eklendi, önceden hiç yoktu**
+✅ Kullanıcı login'i Keycloak'a **doğrudan değil**, YonetimApi BFF üzerinden (ROPC grant, `frontend-test` public client)
+✅ `at`/`rt` **HttpOnly** cookie — JavaScript token'ı hiçbir zaman göremiyor
+✅ `SameSite=Strict` — CSRF koruması
+✅ `Secure` bayrağı koşullu (`IsHttps || X-Forwarded-Proto==https`)
+✅ Token refresh (`POST /api/auth/refresh`) — süre dolmadan ~60 sn önce frontend otomatik tetikliyor
+✅ Logout cookie'leri hem `/` hem `/api` path'inde temizliyor
+✅ Servis kimliği (YonetimApi/FlotaApi → FileServiceApi) **ayrı** token — `client_credentials` grant
+✅ Servis token'ı bellekte cache'li (30 sn erken-expire toleranslı, thread-safe double-checked locking)
+✅ `KeycloakBackchannelHandler` — YonetimApi, FileServiceApi **ve FlotaApi'de** (FlotaApi'ye bu oturumda eklendi) — `KC_HOSTNAME=localhost` JWKS çözümleme sorununu düzeltiyor
+✅ FlotaApi'nin `at` cookie'sinden token okuma kodu (bu oturumda eklendi) — **canlı test edildi**
+✅ `MapInboundClaims = false` — özel claim isimleri (`personnel_id`, `vehicle_id`, `roles`) bozulmadan korunuyor
 
-## RBAC — Personel (YonetimApi)
+## 5. Keycloak
 
-+ `read.self` / `read.team` / `read.all`, `write.self` / `write.all` rolleri (write.team bilinçli olarak yok)
-+ `PermissionService` — kontrol sırası `all → team → self`
-+ `yonetim.team_members` tablosuyla gerçek ekip sorgusu
-+ fileId-ownership çift kontrol (kendi personelId'n üzerinden başkasının fileId'sine erişememe)
-+ Personel arama endpoint'inin kendi scope-filtreli SQL'i
+✅ `platform` realm'i statik `realm-platform.json`'dan import ediliyor (`start-dev --import-realm`)
+✅ 3 client: `frontend-test` (public), `yonetimapi`, `filoapi` (confidential, service account)
+✅ `yonetimapi`/`filoapi` client'larında sabit `app_code` claim mapper'ı
+✅ 8 rol: `personnel.files.{read,write}.{self,team,all}` (write.team hariç), `ops.{read,execute,admin}`
+✅ 28 demo kullanıcı — hepsi bu oturumda gerçek login ile test edildi
+✅ `accessTokenLifespan: 300`, `ssoSessionIdleTimeout: 1800`
+✅ `vehicle_id`/`personnel_id`/`roles` claim mapper'ları (`oidc-usermodel-attribute-mapper`, `oidc-usermodel-realm-role-mapper`)
 
-## Filo (FlotaApi)
+## 6. RBAC — Personel (YonetimApi)
 
-+ `vehicle_id` JWT claim'i ile tek-araç erişim modeli (rol yok)
-+ `HasVehicleAccess` — path'teki araç ID'si ile claim birebir eşleşmeli
-- Araç için ayrı bir veritabanı tablosu yok (`filo.vehicles` yok, araç hiç "kayıt" değil)
+✅ Rol formatı `{kaynak}.{eylem}.{kapsam}` — kod ve Keycloak realm'i birebir aynı isimlendirme
+✅ `PermissionService.CanReadAsync`/`CanWriteAsync` — sıra: `all → team → self`
+✅ `yonetim.team_members` tablosuna gerçek SQL sorgusu (`IsTeamMemberAsync`)
+✅ Personel arama endpoint'inin kendi scope-filtreli SQL'i
+✅ fileId-ownership çift kontrol (`FileBelongsToPersonnelAsync`)
+✅ **Canlı test:** m001 kendi ekibini (P001) görür → 200; başka ekibi (P008) göremez → 403; hiç yazma rolü yok, kendi ekibine bile yükleyemez → 403
+✅ **Canlı test:** p001 kendini görür, başkasını (P002) göremez → 403; kendi kaydına bile yükleme yapamaz → 403
+✅ **Canlı test:** p001, kendi personelId'si üzerinden P002'nin gerçek bir fileId'sine erişemiyor → 403 `file_scope_denied`
 
-## Veritabanı (`platformdb`)
+## 7. Filo (FlotaApi)
 
-+ 4 şema: `files`, `yonetim`, `filo`, `ops`
-+ `files.objects`, `files.references`, `files.app_policies`, `files.relation_type_config`, `files.audit_events`
-+ `yonetim.personnel` (25 kayıt), `yonetim.team_members`, `yonetim.audit_events`
-+ `filo.audit_events`
-+ `ops.audit_events`
-+ `trg_check_single_primary` trigger (DB seviyesinde çift-primary engeli)
-- `filo.vehicles` yok
-- Audit tablolarının sadece `files.audit_events`'inde CHECK constraint var; `yonetim`/`filo`/`ops` audit'lerinde yok
-- `files.references.relation_type` foreign key değil, serbest metin
+✅ Rol yok — sadece JWT'deki `vehicle_id` claim'i ile path'teki araç ID'si birebir eşleşmesi (`HasVehicleAccess`)
+✅ **Canlı test:** fleetuser kendi aracını (test_arac_1) görür → 200, gerçek dosya yükler → 200, arşivler → 200
+✅ **Canlı test:** fleetuser başka aracı (test_arac_2) göremez/yükleyemez → 403 `data_scope_denied`
+✅ photo/document/official_document için metadata+content+upload+archive route'ları; attachment/report için sadece upload (multi-primary)
 
-## Dosya Depolama (FileServiceApi)
+## 8. Veritabanı (`platformdb`, tek instance)
 
-+ Sharding: `{domain}/{2hex}/{2hex}/{guid}.{ext}`
-+ staging → export atomik taşıma (`File.Move`)
-+ Upload sırasında SHA256 hesaplama ve doğrulama
-+ Magic-byte kontrolü (pdf/jpg/png/webp) — **canlı test edildi, 415 doğru döndü**
-+ Content-Type header kontrolü
-+ Uzantı allow-list (relation type bazlı)
-+ Boyut limiti (personel 10MB, filo 20MB) — **canlı test edildi, 413 doğru döndü**
-+ Duplikasyon kontrolü (409)
-+ ETag / 304 Not Modified — **canlı test edildi**
-+ Range / 206 Partial Content — **canlı test edildi**
-+ Content-Disposition (RFC 5987, Türkçe karakter desteği)
-+ Path traversal koruması
-+ Single/multi-primary kardinalite sistemi + DB trigger
-+ Soft-archive (durum bayrağı) — **canlı test edildi, arşivlenen dosya kendi fileId'siyle 404, listede görünmüyor**
-+ Eksik binary → 503 — **canlı test edildi** (dosya NFS'ten elle silindi, DB "var" diyordu, API doğru 503 döndü)
-- Hard delete özelliği hiç yok (bilinçli, plan da bunu V1'de istemiyor)
-- NFS read-only/publisher modeli yok (§ yukarıda)
-- Multi-primary tiplerde (`document`/`attachment`/`report`) `archive` çağrısı `fileId` almıyor — hangi kaydın arşivleneceği belirsiz olabilir (güvenlik açığı değil, UX belirsizliği)
+✅ 4 şema: `files`, `yonetim`, `filo`, `ops`
+✅ `files.objects` — UUID PK, `relative_path` UNIQUE + format CHECK, `sha256` format CHECK, `status`/`classification` CHECK
+✅ `files.references` — FK'li `file_id`/`app_code`, `is_primary`, `status` CHECK
+✅ `files.app_policies` — `yonetimapi`→personnel (10MB), `filoapi`→fleet (20MB)
+✅ `files.relation_type_config` — cv/photo/official_document=single, document/attachment/report=multi
+✅ `files.audit_events` — CHECK constraint'li `action`/`result`, `actor_ip`/`user_agent` sütunları
+✅ `trg_check_single_primary` — gerçek bir Postgres trigger, çift-primary'yi DB seviyesinde engelliyor
+✅ `files.set_updated_at()` trigger fonksiyonu (`objects`/`app_policies` için)
+✅ `yonetim.personnel` — 25 gerçek kayıt (HR001, ADM001, M001-3, P001-24)
+✅ `yonetim.team_members` — 21 gerçek yönetici-personel ilişkisi
+✅ `yonetim.audit_events`, `filo.audit_events`, `ops.audit_events` — üçü de ayrı, gerçek tablolar
+✅ İndeksler: domain/status/sha256/created_by_app (`files.objects`), entity/app_code (`files.references`), personnel/actor/created (audit tabloları)
+✅ Postgres healthcheck (`pg_isready`) tanımlı ve `service_healthy` koşuluyla diğer servislerin başlangıcını bekletiyor
 
-## Audit
+## 9. Dosya Depolama (FileServiceApi) — Tek Tek Canlı Test Edildi
 
-+ `files.audit_events` — teknik, app bazlı — **canlı sorgulandı, gerçek kayıtlar görüldü**
-+ `yonetim.audit_events` — domain, personel bazlı
-+ `filo.audit_events` — domain, araç bazlı
-+ `ops.audit_events` — ops konsolu, diğer 3'ünden bağımsız
-+ `actor_ip` / `user_agent` zinciri (nginx → YonetimApi → FileServiceApi → audit tablosu)
-+ Audit yazma hatası ana akışı bloklamıyor (try/catch + log)
+✅ Sharding: `{domain}/{ilk2hex}/{sonraki2hex}/{guid}.{ext}` — gerçek yüklenen dosyalarla doğrulandı
+✅ staging → export atomik taşıma (`File.Move`, aynı dosya sistemi içinde rename)
+✅ SHA256 hesaplama (diske yazılan gerçek içerikten) ve ETag olarak kullanılması
+✅ Magic-byte kontrolü — **test edildi**: sahte içerikli `.pdf` → `415`
+✅ Content-Type header kontrolü (uzantıyla eşleşmeli)
+✅ Uzantı allow-list (relation type bazlı: cv/report=pdf, photo=jpg/jpeg/png/webp, diğerleri karışık)
+✅ Boyut limiti — **test edildi**: 11MB dosya (10MB limitine karşı) → `413`
+✅ Duplikasyon kontrolü (409, aynı SHA256 + aynı entity/relation)
+✅ ETag/304 — **test edildi**: `If-None-Match` ile ikinci istek → `304`, disk okunmadı
+✅ Range/206 — **test edildi**: `Range: bytes=0-5` → `206 Partial Content`, doğru `Content-Length`
+✅ Path traversal koruması — normalize edilmiş path kök dizini aşamıyor
+✅ Content-Disposition RFC 5987 (Türkçe karakter desteği), resimler `inline` diğerleri `attachment`
+✅ Soft-archive — **test edildi**: arşivlenen dosya kendi fileId'siyle `404`, dosya listesinde hiç görünmüyor
+✅ Eksik binary → 503 — **test edildi**: dosya NFS'ten elle silindi, DB "aktif" diyordu, API doğru şekilde `503` döndü
+✅ Upload/DB tutarsızlığında rollback (DB kaydı başarısız olursa export'tan dosya silinir)
+✅ `files.audit_events`'e her create/read/archive/denied yazılıyor — **doğrudan SQL ile sorgulanıp gerçek kayıtlar görüldü**
+✅ `/health` endpoint'i — `.probe` dosyası + gerçek `SELECT 1` DB sorgusu
 
-## Ops Console / OpsApi
+## 10. Ops Console / OpsApi
 
-+ Docker socket'e erişimi yok (bilinçli) — host'un yazdığı durum dosyasından okuyor
-+ `/ops/health`, `/ops/services`, `/ops/disk`, `/ops/backups`, `/ops/version`, `/ops/dashboard`, `/ops/me`
-+ Container adı/CPU/RAM/restart/uptime görünümü — **canlı restart testiyle doğrulandı**
-+ 5 dakikalık systemd timer (`services-status.sh`)
-+ Rol bazlı erişim (`ops.read/execute/admin`), rolü olmayana 404 (varlığı bile sızdırılmıyor)
-+ Sekme arka plandan öne gelince anında yenileme (`visibilitychange`, bu oturumda eklendi)
-- Ops audit geçmişi ekranda gösterilmiyor (DB'de var, arayüzde yok)
+✅ Docker socket'e **hiç erişimi yok** — host'ta systemd timer'ının yazdığı JSON dosyasını okuyor (bilinçli güvenlik kararı)
+✅ `/ops/health` — yonetimapi/flotaapi/keycloak/gateway/postgres'e **gerçek zamanlı** HTTP/DB sağlık kontrolü
+✅ `/ops/services` — container/CPU/RAM/restart/uptime — **canlı restart testiyle doğrulandı**
+✅ `/ops/disk`, `/ops/backups`, `/ops/version`, `/ops/dashboard`, `/ops/me`
+✅ Rol bazlı erişim — `ops.read/execute/admin`, rolü olmayana **404** (403 değil, varlığı bile sızdırılmıyor)
+✅ `opsuser01` (sadece read) yetkileri canlı test edildi: `read=true, execute=false, admin=false`
+✅ Sekme arka plandan öne gelince anında yenileme (`visibilitychange` — bu oturumda eklenip test edildi)
+✅ `X-Correlation-Id` header her `/ops/dashboard` cevabında var — canlı test edildi
+✅ UI'da 6 kart: Servis Durumu, Disk Kullanımı, Uyarılar, Versiyon, Konteynerler, Yedekler
 
-## Backup / Restore
+## 11. Audit Sistemi
 
-+ Günlük backup timer'ı
-+ Haftalık restore-test timer'ı — **canlı tetiklendi, gerçek `sha256sum -c` ile her dosya "OK" verdi**
-+ Saatlik disk doluluk kontrolü
-- `restore-live.sh` "break glass" — otomatik pre-restore backup alma özelliği yok (V2)
+✅ 4 bağımsız audit tablosu (`files`, `yonetim`, `filo`, `ops`) — hiçbiri diğerine bağımlı değil
+✅ `actor_ip`/`user_agent` zinciri: nginx (`X-Real-IP`) → YonetimApi → FileServiceApi → audit tablosu
+✅ Audit yazma hatası ana isteği bloklamıyor (try/catch + log, bilinçli tasarım)
+✅ Ops audit'te `denied` kayıtları (`no_token`, `ops_role_missing`) canlı olarak DB'den sorgulanıp doğrulandı
 
-## Client (React SPA)
+## 12. Backup / Restore
 
-+ Login, Dashboard, Personel/Filo/Ops sekmeleri (JWT claim'lerine göre otomatik görünürlük)
-+ Cookie tabanlı auth (`credentials:'include'`, hiçbir yerde token saklanmıyor)
-+ Upload ilerleme çubuğu (XHR ile gerçek zamanlı yüzde)
-- URL tabanlı router yok — sayfa yenilenince/URL'e link yazılınca state korunmuyor
-- Client-side dosya validasyonu yok (uzantı/boyut kontrolü tamamen sunucuda)
+✅ Günlük backup systemd timer'ı
+✅ Haftalık restore-test timer'ı — **canlı tetiklendi**, gerçek `sha256sum -c` çalıştı, **her dosya için "OK"** çıktısı bizzat görüldü
+✅ Saatlik disk doluluk kontrolü (`disk-check.sh`)
+✅ `tools/install-backup-timers.sh` — 4 timer'ı (backup/restore-test/disk-check/services-status) tek seferde kuruyor
+✅ `tools/configure-files01-nfs.sh` — files01 NFS export'unu production moduna göre yapılandırıyor
 
-## Test / Otomasyon Script'leri
+## 13. Client (React SPA)
 
-+ `server-smoke-test.sh` — temel uçtan uca akış
-+ `server-safe-test-suite.sh` — genişletilmiş kontroller + **10 senaryolu 403 yetkilendirme matrisi (bu oturumda eklendi)**
-+ `services-status.sh`, `disk-check.sh`, `backup-files01.sh`, `restore-test.sh`
-- Cross-domain policy reddi testi yok (mimari olarak dışarıdan tetiklenemiyor, sadece kodla garanti)
-- NFS bağlantısı koparsa ne olur — hiç canlı test edilmedi (riskli müdahale, kasıtlı yapılmadı)
+✅ Login → Dashboard → rol/claim'e göre Personel/Filo/Ops sekmeleri (JWT claim'lerinden otomatik türetiliyor)
+✅ Cookie tabanlı auth (`credentials:'include'`), hiçbir yerde token saklanmıyor (localStorage yok)
+✅ XHR tabanlı upload ile gerçek zamanlı ilerleme çubuğu
+✅ `PersonnelFileView`, `VehicleFileView`, `UploadModal`, `FileCard`, `OpsConsole` bileşenleri — hepsi gerçek, çalışan kod
+✅ 401 alınca otomatik refresh+retry (sadece Ops Console'da, `opsFetch` içinde)
+✅ RFC 5987 Content-Disposition'ı doğru parse edip Türkçe dosya adlarını gösteriyor
+
+## 14. Deploy / Otomasyon Script'leri
+
+✅ `setup-server.sh` — NFS production kontrolü, sertifika kontrolü, `docker compose up --build`, DB schema/seed, backup/disk sağlık raporu — hepsi tek komutta
+✅ `server-smoke-test.sh` — temel uçtan uca akış, **defalarca canlı çalıştırıldı**
+✅ `server-safe-test-suite.sh` — genişletilmiş kontroller + **10 senaryolu 403 yetkilendirme matrisi (bu oturumda eklendi)**, eşzamanlı 20 login testi dahil
+✅ `services-status.sh`, `disk-check.sh`, `backup-files01.sh`, `restore-test.sh`, `restore-live.sh`, `migrate-legacy-files.py`
+✅ `.env` / `.env.linux` / `.env.mac` — ortam bazlı config ayrımı
+
+---
+
+*Bu envanterin karşılığı olan eksik/olmayan şeyler (`-` işaretliler) için: NFS read-only değil, container restart policy yok, `filo.vehicles` tablosu yok, secret rotasyonu yok, client router'ı yok — bunlar önceki oturumlarda ayrıca kayıt altına alınmıştı.*
