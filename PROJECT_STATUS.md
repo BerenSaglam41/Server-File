@@ -2316,22 +2316,28 @@ düzeltildi** — bkz. aşağıdaki "Rate Limit ve Log Maskeleme" bölümü.
 
 ## Rate Limit ve Log Maskeleme (TAMAMLANDI ✅ — 2026-07-02)
 
-Yukarıdaki 2 bulgu kullanıcı isteğiyle hemen düzeltildi:
+Yukarıdaki 2 bulgu kullanıcı isteğiyle düzeltildi, sonra kullanıcının "bunu da ayrı test edip
+kanıtlayalım" isteği üzerine ayrı, kapsamlı bir doğrulama turuyla pekiştirildi:
 
 - **Rate limit:** `/files/download/` için IP başına `limit_req_zone ... rate=30r/s` + `burst=50 nodelay`
-  eklendi, aşılırsa `429 {"error":"too_many_requests","reason":"rate_limited"}`. 120 eşzamanlı sahte
-  istekle test edildi → `57×429, 63×404` (limit gerçekten çalışıyor); gerçek 25 eşzamanlı test senaryosu
+  eklendi, aşılırsa `429 {"error":"too_many_requests","reason":"rate_limited"}`. Test edildi → limit
+  gerçekten tetikleniyor (büyük eşzamanlı yükte çok sayıda `429`); gerçek 25 eşzamanlı test senaryosu
   → değişmeden `20×200, 5×404` (limit kendi testlerimizi engellemiyor).
-- **Log maskeleme:** `map`+özel `log_format` ile ticket'ın sadece ilk 8 karakteri log'a yazılıyor
-  (`2m5chPOW...`), tam ticket asla görünmüyor. **Düzeltme sırasında ek bir gerçek bug bulundu:**
-  X-Accel-Redirect nedeniyle başarılı (200/206/304) yanıtlar `/protected-download/` (internal)
-  location'ında finalize ediliyor — `access_log` sadece `/files/download/` location'ına eklenince
-  hiç etkisi olmadı (bir debug header ile ampirik kanıtlandı). Düzeltme: maskeli `access_log` her
-  iki location'a da eklendi. Ayrıca küçük bir `"HTTP/HTTP/1.1"` format hatası da bulunup düzeltildi.
+- **Log maskeleme:** `map`+özel `log_format` ile ticket'ın sadece ilk 8 karakteri log'a yazılıyor,
+  tam ticket asla görünmüyor. **Toplam 4 ayrı sızıntı noktası bulunup kapatıldı** — nginx'in internal
+  redirect mekanizması (`X-Accel-Redirect` ve `error_page`), bir yanıtı ORİJİNAL location'dan FARKLI bir
+  location'da bitirebiliyor ve o location'ın kendi `access_log`'u (varsa) geçerli oluyor:
+  1. `/files/download/` kendi context'i (403/404) — ilk denemede maskeliydi.
+  2. `/protected-download/` (X-Accel hedefi, başarılı 200/206/304) — maskeli DEĞİLDİ, bulunup düzeltildi.
+  3. `@rate_limited` (`error_page 429` hedefi) — maskeli DEĞİLDİ, ek doğrulama turunda bulunup düzeltildi.
+  4. nginx'in `limit_req` modülünün kendi `error_log` diagnostik satırı (log_format'tan bağımsız, sabit
+     format, her zaman tam ticket'lı) — `limit_req_log_level notice;` ile susturuldu.
 
-Regresyon: `tools/server-smoke-test.sh` (23/23), `tools/server-safe-test-suite.sh`, `platform-backup.service`
-— hepsi düzeltmeler sonrası tekrar geçti. Tam kanıt: `proof/download-ticket-lease-model.md` → "Rate Limit
-ve Log Maskeleme Düzeltmeleri" bölümü.
+Regresyon: her düzeltme turunda `tools/server-smoke-test.sh` (23/23) + son turda `tools/server-safe-test-suite.sh`
+(36/36) + `platform-backup.service` + **temiz (cold) restart sonrası** tekrar smoke test — hepsi geçti.
+
+Tam kanıt: `proof/gateway-rate-limit-ve-ticket-log-maskeleme.md` (3 sızıntı noktasının her biri için ayrı
+bulgu/düzeltme/test anlatımı içerir).
 
 **Bilinçli kalan sınır:** Log'da ticket'ın ilk 8 karakteri (256-bit'in ~48 biti) hâlâ görünüyor — tam
 sıfırlama yerine temel ops-görünürlüğü/debugging için bilinçli bir denge; brute-force riski taşımıyor.

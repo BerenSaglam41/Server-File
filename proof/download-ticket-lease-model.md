@@ -171,75 +171,9 @@ ardından ikisi de düzeltildi (aşağıya bakın).
 
 ## Rate Limit ve Log Maskeleme Düzeltmeleri (TAMAMLANDI ✅ — 2026-07-02)
 
-### Rate Limit
+Yukarıdaki 2 bulgu (rate limit yok, ticket log'da açık) düzeltildi. Kullanıcının "bunu da ayrı test edip
+kanıtlayalım" isteği üzerine bu iş kendi başına, kapsamlı bir belgeye taşındı — 3 ayrı sızıntı noktası
+(X-Accel hedefi, rate-limit hedefi, nginx'in kendi `limit_req` error_log'u) bulunup kapatıldığı, ve her
+biri ayrı ayrı test edildiği detaylarıyla orada:
 
-`nginx.conf`'a `/files/download/` için IP başına rate limit eklendi:
-```nginx
-limit_req_zone $binary_remote_addr zone=download_limit:10m rate=30r/s;
-limit_req_status 429;
-...
-location ~ ^/files/download/(?<ticket>[A-Za-z0-9_-]+)$ {
-    limit_req zone=download_limit burst=50 nodelay;
-    ...
-}
-```
-`burst=50` seçildi çünkü gerçek testlerimizin en yoğunu (25 eşzamanlı istek) bunun rahatça altında kalıyor
-— test yaparken kendimizi engellemeden, gerçek kötüye kullanımı (saniyede yüzlerce istek) sınırlıyor.
-Aşılırsa `429` + `{"error":"too_many_requests","reason":"rate_limited"}` JSON body (mevcut
-`error_page`/`@upstream_down` desenine uygun yeni bir `@rate_limited` handler'ı eklendi).
-
-**Test 1 — Rate limit gerçekten devrede mi:** 120 eşzamanlı istek (sahte ticket'larla, saf throttle testi)
-→ **57×429, 63×404** — limit gerçekten tetikleniyor.
-
-**Test 2 — Gerçek kullanım senaryomuzu engellemiyor mu:** 25 eşzamanlı istek (gerçek, geçerli tek ticket'a,
-lease/max-uses testindeki gibi) → **tam olarak `20×200, 5×404`** — rate limit hiç araya girmedi, sonuç
-öncekiyle birebir aynı.
-
-### Log Maskeleme
-
-**Bulunan ek bir gerçek sorun (düzeltme sırasında keşfedildi):** İlk denemede `access_log` ve custom
-`log_format`'ı `/files/download/{ticket}` location'ına eklememe rağmen ticket **hâlâ maskelenmeden**
-log'a yazılıyordu. Kök neden: X-Accel-Redirect ile **başarılı (200/206/304)** yanıtlar aslında
-`/protected-download/` (internal) location'ında finalize ediliyor — orijinal location'daki
-`access_log`/`add_header` gibi response-seviyesi direktifler bu durumda **hiç uygulanmıyor**. Bu, bir
-debug header (`add_header X-Debug-Ticket-Masked`) ile ampirik olarak doğrulandı: header sadece
-`/protected-download/` location'ına eklendiğinde görünür oldu.
-
-**Düzeltme:** Maskeli `access_log` her iki location'a da eklendi — `/files/download/` (X-Accel
-tetiklenmeyen 403/404/429 yanıtları için) ve `/protected-download/` (başarılı X-Accel yanıtları için,
-asıl önemli olan). `$ticket` named-capture'ının `/protected-download/`'a internal redirect sonrası da
-erişilebilir kaldığı doğrulandı.
-
-```nginx
-map $ticket $ticket_masked {
-    "~^(.{8})" "$1...";
-    default    "(yok)";
-}
-log_format download_masked
-    '$remote_addr - - [$time_local] "$request_method /files/download/$ticket_masked '
-    '$server_protocol" $status $body_bytes_sent "$http_referer" "$http_user_agent"';
-```
-
-**Test — Maskeleme gerçekten çalışıyor mu:** Gerçek ticket `2m5chPOWV13BGfAXeL86ALZEyQjcyqk9PhOptVjZVvk`
-ile indirme yapıldı. Log çıktısı:
-```
-"GET /files/download/2m5chPOW... HTTP/1.1" 200 110567 "-" "curl/8.18.0"
-```
-Sadece ilk 8 karakter (`2m5chPOW`) görünüyor, tam ticket log'da **hiç yok**. 20 eşzamanlı başarılı isteğin
-tamamı da doğru maskelendiği doğrulandı (hepsi aynı ticket'ın ilk 8 karakteriyle, `yPaxrd3F...`).
-
-**Küçük bir formatting hatası da bulunup düzeltildi:** İlk denemede log satırında `"HTTP/HTTP/1.1"`
-(mükerrer yazım) görüldü — `log_format` string'inde `$server_protocol` zaten `"HTTP/1.1"` döndürdüğü
-için önüne ayrıca `"HTTP/"` eklemek gereksizdi. Düzeltildi, tekrar test edildi: `"HTTP/1.1"` (doğru).
-
-### Regresyon
-
-`tools/server-smoke-test.sh` (23/23), `tools/server-safe-test-suite.sh` (tüm senaryolar), `platform-backup.service`
-(+ otomatik restore-test) — hepsi düzeltmeler sonrası tekrar çalıştırıldı, regresyonsuz.
-
-### Kalan, Bilinçli Kabul Edilen Sınır
-
-Log'da ticket'ın **ilk 8 karakteri** hâlâ görünüyor (tamamen sıfır değil) — bu, temel ops
-görünürlüğü/debugging için bilinçli bir denge (tamamen `"(yok)"` yazmak yerine, "bu ticket'a ait bir
-istek oldu mu" sorusuna en azından kısmi cevap veriyor). 8 karakter, 256-bit'lik ticket'ın çok küçük bir
-kısmı (~48 bit) olduğu için brute-force/yeniden oluşturma riski taşımıyor.
+**Tam kanıt: `proof/gateway-rate-limit-ve-ticket-log-maskeleme.md`**
