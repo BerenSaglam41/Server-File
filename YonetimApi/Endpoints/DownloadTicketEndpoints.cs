@@ -98,45 +98,87 @@ public static class DownloadTicketEndpoints
 
         // Atomik tek-kullanım: sadece used_at NULL iken güncelle, aynı anda iki
         // istek gelirse yalnızca biri satırı "kullanılmış" olarak işaretleyebilir.
-        await using var cmd = db.CreateCommand(
+        // ÖNEMLİ: UPDATE komutu ve okuyucusu kendi using bloğunda TAM olarak
+        // kapatılmadan ikinci bir komut (diagnostic SELECT) açılmamalı — aksi
+        // halde eşzamanlı isteklerde Npgsql "a command is already in progress"
+        // hatası fırlatıyor (bu, canlı yük testiyle bulunup düzeltildi).
+        var correlationId = Guid.NewGuid().ToString();
+        string? personnelId = null;
+        Guid fileId = Guid.Empty;
+        string? actor = null;
+
+        await using (var cmd = db.CreateCommand(
             "UPDATE yonetim.download_tickets SET used_at = now() " +
             "WHERE ticket_hash = $1 AND used_at IS NULL AND expires_at > now() " +
-            "RETURNING personnel_id, file_id, actor");
-        cmd.Parameters.AddWithValue(ticketHash);
-
-        string personnelId; Guid fileId; string actor;
-        await using (var reader = await cmd.ExecuteReaderAsync())
+            "RETURNING personnel_id, file_id, actor"))
         {
-            if (!await reader.ReadAsync())
+            cmd.Parameters.AddWithValue(ticketHash);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
             {
-                response.StatusCode = 404;
-                await response.WriteAsJsonAsync(new { error = "not_found" });
-                return;
+                personnelId = reader.GetString(0);
+                fileId = reader.GetFieldValue<Guid>(1);
+                actor = reader.GetString(2);
             }
-            personnelId = reader.GetString(0);
-            fileId = reader.GetFieldValue<Guid>(1);
-            actor = reader.GetString(2);
+        } // cmd + reader burada tamamen kapanır, bağlantı pool'a temiz döner
+
+        if (personnelId is null)
+        {
+            // Atomik UPDATE 0 satır etkiledi — neden olduğunu (hiç yok / süresi
+            // dolmuş / zaten tüketilmiş) sadece audit amacıyla, TAMAMEN AYRI ve
+            // yukarıdaki komut kapandıktan sonra açılan bir SELECT'le öğreniyoruz.
+            // Bu SELECT tek-kullanım garantisinin bir parçası değil, yalnızca
+            // teşhis/audit içindir.
+            var diagPersonnelId = "UNKNOWN";
+            var reasonCode = "ticket_not_found";
+
+            await using (var diagCmd = db.CreateCommand(
+                "SELECT personnel_id, used_at, expires_at FROM yonetim.download_tickets WHERE ticket_hash = $1"))
+            {
+                diagCmd.Parameters.AddWithValue(ticketHash);
+                await using var diagReader = await diagCmd.ExecuteReaderAsync();
+                if (await diagReader.ReadAsync())
+                {
+                    diagPersonnelId = diagReader.GetString(0);
+                    var usedAt = diagReader.IsDBNull(1) ? (DateTime?)null : diagReader.GetFieldValue<DateTime>(1);
+                    var expiresAt = diagReader.GetFieldValue<DateTime>(2);
+                    reasonCode = usedAt is not null ? "ticket_already_used"
+                        : expiresAt <= DateTime.UtcNow ? "ticket_expired"
+                        : "ticket_race_lost";
+                }
+            }
+
+            await audit.WriteAsync(diagPersonnelId, "anonymous", "PersonnelDownloadTicketConsumed", "denied", reasonCode, correlationId);
+            response.StatusCode = 404;
+            await response.WriteAsJsonAsync(new { error = "not_found" });
+            return;
         }
 
-        var correlationId = Guid.NewGuid().ToString();
+        var resolvedActor = actor ?? "anonymous";
         var client = httpClientFactory.CreateClient("FileService");
         var serviceToken = await tokenService.GetServiceTokenAsync();
 
         var contentReq = new HttpRequestMessage(HttpMethod.Get, $"internal/files/{fileId}/content");
         contentReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
-        contentReq.Headers.Add("X-Actor-User-Id", actor);
+        contentReq.Headers.Add("X-Actor-User-Id", resolvedActor);
         contentReq.Headers.Add("X-Correlation-Id", correlationId);
+        // Not: ticket tek kullanımlıktır — bu, Range header'ı olsa bile TEK bir HTTP
+        // isteğiyle sınırlıdır. Aynı ticket'la ikinci bir Range isteği (örn. video/PDF
+        // parça parça okuma) 404 döner. V1'de "lease" (birden fazla Range isteğine izin
+        // veren süreli oturum) yok — bilinçli karar, bkz. proof/download-ticket-sistemi.md.
+        if (httpContext.Request.Headers.TryGetValue("Range", out var range))
+            contentReq.Headers.TryAddWithoutValidation("Range", range.ToString());
 
         var resp = await client.SendAsync(contentReq, HttpCompletionOption.ResponseHeadersRead);
         response.StatusCode = (int)resp.StatusCode;
 
         if (!resp.IsSuccessStatusCode)
         {
-            await audit.WriteAsync(personnelId, actor, "PersonnelDownloadTicketConsumed", "error", null, correlationId);
+            await audit.WriteAsync(personnelId, resolvedActor, "PersonnelDownloadTicketConsumed", "error", null, correlationId);
             return;
         }
 
-        await audit.WriteAsync(personnelId, actor, "PersonnelDownloadTicketConsumed", "success", null, correlationId);
+        await audit.WriteAsync(personnelId, resolvedActor, "PersonnelDownloadTicketConsumed", "success", null, correlationId);
 
         if (resp.Content.Headers.ContentType is not null)
             response.ContentType = resp.Content.Headers.ContentType.ToString();
@@ -144,6 +186,11 @@ public static class DownloadTicketEndpoints
             response.ContentLength = resp.Content.Headers.ContentLength.Value;
         if (resp.Content.Headers.TryGetValues("Content-Disposition", out var cd))
             response.Headers["Content-Disposition"] = cd.ToArray();
+        if (resp.Headers.TryGetValues("ETag", out var etag))
+            response.Headers["ETag"] = etag.ToArray();
+        if (resp.Content.Headers.TryGetValues("Content-Range", out var cr))
+            response.Headers["Content-Range"] = cr.ToArray();
+        response.Headers["Accept-Ranges"] = "bytes";
 
         await resp.Content.CopyToAsync(response.Body);
     }

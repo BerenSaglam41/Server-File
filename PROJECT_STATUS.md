@@ -554,6 +554,10 @@ MD gereksinimleri (`file-catalog-model.md` + `file-service-api-contract.md`) ile
 | `POST /api/personnel/{id}/official-document/archive` | single | Resmi evrak arşivleme |
 | `POST /api/personnel/{id}/document` | multi | Belge yükleme — eskiler korunur |
 | `POST /api/personnel/{id}/attachment` | multi | Ek dosya yükleme — eskiler korunur |
+| `GET /api/personnel/{id}/files/{fileId}/content` | — | fileId bazlı stream (multi-primary dosyalar için) |
+| `POST /api/personnel/{id}/files/{fileId}/archive` | — | fileId bazlı arşivleme |
+| `POST /api/personnel/{id}/files/{fileId}/download-ticket` | — | Opak, 256-bit, tek kullanımlık indirme ticket'ı üretir (bkz. "Opak, Tek Kullanımlık İndirme Ticket'ı" bölümü) — normal cookie auth gerektirir |
+| `GET /api/personnel/download/{ticket}` | — | Ticket'ı tüketip dosyayı stream eder — **`AllowAnonymous`**, cookie/JWT gerekmez, ticket'ın kendisi yetkidir |
 
 Tüm endpoint'lerde:
 - `Authorization: Bearer <service-token>` — YonetimApi, Keycloak'tan aldığı service token'ı ekler (client bunu göremez/değiştiremez)
@@ -1946,27 +1950,53 @@ sınırımıza (FileServiceApi internal-only, mTLS zorunlu) uyacak şekilde uyar
   - `PersonnelEndpoints.FileBelongsToPersonnelAsync` ve `OwnershipResult` `internal` yapılıp tekrar
     kullanıldı (kod tekrarı yok).
 
-### Doğrulama — sunucuda 7 canlı test, hepsi geçti
+### Doğrulama — sunucuda 15 canlı test, hepsi geçti (2 turda)
 
-1. Ticket oluşturma → `200`, 256-bit base64url ticket + `expiresInSeconds:60` döndü.
-2. Ticket ile **hiçbir cookie olmadan** indirme → `200`, doğru dosya (110567 byte) indi.
-3. Aynı ticket'ı tekrar kullanma → `404` (tek kullanımlık, DB'de ikinci `UPDATE` 0 satır etkiledi).
-4. Uydurma/var olmayan ticket → `404` (varlık sızdırmıyor).
-5. 60 saniyelik ticket'ı 65 saniye bekleyip kullanma → `404` (süre kontrolü çalışıyor).
-6. p001, P002'nin path'i üzerinden ticket istemeye çalıştı → `403 access_denied` (RBAC, ticket satırı hiç
-   oluşmadı — DB'den doğrulandı).
-7. p001 kendi dosyası için ticket istedi → `200` (pozitif kontrol).
+**Tur 1 (temel davranış, A-G):** ticket oluşturma (256-bit base64url), cookie'siz tüketim (200, doğru dosya),
+tekrar kullanım reddi (404), uydurma ticket reddi (404), süre dolumu reddi (404, 65sn bekleme), RBAC reddi
+(403 access_denied, ticket hiç oluşmuyor), pozitif kontrol (200).
 
-`yonetim.audit_events`'e `PersonnelDownloadTicketCreated`/`PersonnelDownloadTicketConsumed` olarak
-yazıldığı doğrudan SQL sorgusuyla doğrulandı. Tam smoke test tekrar çalıştırıldı, hiçbir regresyon yok.
+**Tur 2 (derinlemesine, H-O) — kullanıcı talebiyle genişletildi, 1 gerçek bug bulundu:**
 
-Test detayları ve kanıtları: `proof/download-ticket-sistemi.md`.
+- **H:** DB şemasında (`\d yonetim.download_tickets`) açık ticket saklayan hiçbir kolon yok, sadece
+  `ticket_hash` (SHA256, CHECK constraint'li) — doğrulandı.
+- **I:** Ticket'ın son karakteri değiştirilince `404` (path/fileId taşımıyor, tahmin edilemez); orijinal
+  hâlâ çalışıyor (henüz tüketilmemiş).
+- **J — GERÇEK BUG BULUNDU VE DÜZELTİLDİ:** Aynı ticket'a 10 eşzamanlı istek atıldığında ilk kod
+  `1×200, 8×404, 1×500, 2×timeout` verdi (beklenen: `1×200, 9×404`). Kök neden:
+  `Npgsql.NpgsqlOperationInProgressException` — `ConsumeTicketAsync`'te bir `await using` bloğu içindeki
+  `reader`'ı hem elle hem blok kapanışında otomatik olmak üzere **iki kez dispose etmek**, eşzamanlı yükte
+  bağlantı durumunu bozuyordu. Tek istekle test edilirken görünmüyordu, sadece gerçek concurrent yükte
+  ortaya çıktı. **Düzeltme:** UPDATE komutu kendi `using` bloğunda temiz kapatılıp, teşhis amaçlı ikinci
+  SELECT tamamen ayrı bir bloğa taşındı. Düzeltme sonrası tekrar test: `1×200, 9×404`, loglar temiz.
+- **K:** Range isteğiyle ilk tüketim → `206 Partial Content`; aynı ticket'la ikinci Range isteği → `404`
+  (tek-kullanım Range'i de kapsıyor — V1'de çoklu Range/"lease" modeli yok, bilinçli karar, dokümante
+  edildi).
+- **L:** Süresi dolmuş ticket satırları **otomatik temizlenmiyor** (DB'de doğrulandı: 11 satır, 2'si süresi
+  dolmuş ama hâlâ orada) — bilinen V1 sınırlaması, düşük hacimde risksiz.
+- **M:** Ticket alındıktan sonra dosya arşivlenirse → ticket tüketilir (`used_at` işaretlenir) ama içerik
+  isteği FileServiceApi'nin kendi status kontrolünden `404` döner — tutarlı davranış.
+- **N:** Logout sonrası normal cookie isteği `401` (oturum doğru sonlanıyor), ama aynı ticket'la indirme
+  hâlâ `200` — ticket cookie'den bağımsız, bilinçli V1 kararı (ömür zaten 60 sn).
+- **O — İKİNCİ BUG (audit eksikliği) BULUNDU VE DÜZELTİLDİ:** İlk kodda başarısız ticket tüketim denemeleri
+  (geçersiz/süresi dolmuş/tekrar kullanılan) hiç audit'e yazılmıyordu. Eklenen teşhis sorgusuyla artık
+  `ticket_not_found`, `ticket_expired`, `ticket_already_used` reason code'larıyla `yonetim.audit_events`'e
+  yazılıyor — üçü de ayrı ayrı test edilip doğrulandı.
 
-### Bilinen sınırlamalar (V1, bilerek)
+Her iki turda da tam smoke test (`tools/server-smoke-test.sh`, 23 adım) tekrar çalıştırıldı, regresyon yok.
+Değişiklikler `git push` ile GitHub'a gönderilip sunucuda `git pull` ile senkronize edildi (local/origin/
+server `git rev-parse HEAD` birebir eşleşti) — kod hem yerelde derlendi hem canlı container'da test edildi.
+
+Test detayları ve kanıtları (15 senaryonun tamamı, ham komut/çıktılarla): `proof/download-ticket-sistemi.md`.
+
+### Bilinen sınırlamalar (V1, bilerek — test edilip doğrulandı)
 
 - Sadece personel (`YonetimApi`) tarafında var; FlotaApi'ye henüz taşınmadı.
-- Süresi dolmuş/tüketilmiş ticket satırları DB'de birikir — otomatik temizlik (cron/job) yok, düşük hacimde
-  şu an sorun değil ama uzun vadede bir temizlik görevi eklenmeli.
+- Süresi dolmuş/tüketilmiş ticket satırları DB'de birikir — otomatik temizlik (cron/job) yok (Test L ile
+  doğrulandı), düşük hacimde şu an sorun değil ama uzun vadede bir temizlik görevi eklenmeli.
+- Çoklu Range isteği (video/büyük dosya seeking) desteklenmiyor — tek ticket = tek HTTP isteği (Test K ile
+  doğrulandı). Gerekirse V2'de "lease" modeli değerlendirilir.
+- Logout, açık ticket'ları iptal etmiyor (Test N ile doğrulandı) — ömür kısa olduğu için bilinçli kabul.
 - `relation_type` alanı ticket oluşturma sırasında bilinmediği için `"unknown"` olarak yazılıyor — fileId
   bazlı akışta işlevsel bir etkisi yok, sadece kozmetik.
 
@@ -1993,7 +2023,12 @@ Test detayları ve kanıtları: `proof/download-ticket-sistemi.md`.
   önce otomatik pre-restore backup alması eklenecek.
 - **Strict NFS ro/publisher modeli**: Minimum production için şart değil; V2 hardening olarak tutuluyor.
   Bu modele geçilirse FileService runtime NFS'e yazmaz, staging/publish ayrı kontrollü sürece taşınır.
-- **V2 Download**: `file-service-api-contract.md`'deki V2 model — performans baskısı oluşursa değerlendirilecek.
+- **V2 Download ticket'ının FlotaApi'ye taşınması**: personel tarafı (`YonetimApi`) TAMAMLANDI (bkz. yukarıdaki
+  "Opak, Tek Kullanımlık İndirme Ticket'ı" bölümü); aynı desen FlotaApi/araç dosyaları için henüz eklenmedi.
+- **Ticket cleanup job'ı**: süresi dolmuş `yonetim.download_tickets` satırları otomatik silinmiyor (Test L,
+  bkz. `proof/download-ticket-sistemi.md`) — düşük hacimde risksiz ama uzun vadede eklenmeli.
+- **Ticket lease modeli**: şu an tek ticket = tek HTTP isteği (Range dahil). Büyük dosya/video için çoklu
+  Range gerekirse süreli "lease" modeli değerlendirilebilir (Test K).
 - **Sertifika rotasyonu**: `certs/generate-certs.sh` artık mevcut CA/sertifikaları varsayılan olarak ezmez; `FORCE_REGENERATE_CERTS=1` bilinçli rotasyon içindir. Gateway SAN değerleri `GATEWAY_DNS`/`GATEWAY_IPS` ile parametrelenir. Prod'da CA rotasyonu ayrı prosedürle yapılmalı.
 - **Fleet vehicle araması**: FlotaApi'ye `GET /api/vehicles?search=` endpoint'i eklenirse Dashboard'a araç listesi sidebar'ı eklenebilir (şu an yoktur — V2 adayı).
 

@@ -41,6 +41,26 @@
 
 **Neden hatalı:** İki kaynak başlığı da (`Ticket Sözleşmesi`, `Ticket Store`) uydurma; gerçek doküman bu kadar detaylı bir ticket modeli tanımlamıyor.
 
+**GÜNCELLEME (2026-07-02) — Madde 2 artık uygulandı, ama uydurma kaynağa dayanarak değil, bilinçli bir mimari kararla:**
+
+Kaynak alıntısı hâlâ hatalı (yukarıdaki tespit değişmedi), ama kullanıcı bu ticket **konseptinin** (opak,
+256-bit, hash olarak saklanan, kısa ömürlü, tek kullanımlık) kendi başına mantıklı bir güvenlik deseni
+olduğuna karar verdi ve uygulanmasını istedi. Bu, `PROJE/file-service-api-contract.md`'nin kendi (gerçek,
+kısa) "V2 Download Ticket Opsiyonu" notu temel alınarak, **madde 1 ve 3'ün önerdiği gibi FileServiceApi'yi
+dışa açmadan** (mevcut, doğrulanmış mTLS/internal-only sınırı korunarak) `YonetimApi` içinde uygulandı:
+
+- `YonetimApi/Endpoints/DownloadTicketEndpoints.cs` — `POST .../download-ticket` (RBAC sonrası 256-bit
+  opak ticket üretir, sadece hash'i DB'ye yazar) ve `GET /api/personnel/download/{ticket}` (cookie'siz,
+  atomik tek-kullanım).
+- 15 canlı senaryoyla test edildi, bu süreçte **2 gerçek bug bulunup düzeltildi** (eşzamanlı isteklerde
+  Npgsql bağlantı hatası; başarısız denemelerin audit'lenmemesi).
+- Tam kanıt: `proof/download-ticket-sistemi.md`. Karar gerekçesi ve kapsam: `PROJECT_STATUS.md` →
+  "Opak, Tek Kullanımlık İndirme Ticket'ı" bölümü.
+
+**Yapılmayan kısım:** Raporun madde 1'de istediği gibi Gateway'in `X-Accel-Redirect` ile ticket'ı tüketmesi
+uygulanmadı — bu hâlâ gerçek dosyalarda doğrulanamayan, FileServiceApi'yi mTLS sınırının dışına çıkaracak
+bir öneri olduğu için. Ticket, YonetimApi'nin kendi proxy'sinde tüketiliyor.
+
 ---
 
 ## Madde 3 — Servis Auth: mTLS'in Kapsamı
