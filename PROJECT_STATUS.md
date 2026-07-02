@@ -2142,6 +2142,32 @@ doğrudan yazma denemesi** (`Read-only file system` — planın kendi "Doğrulam
 denial" testi), `:ro` sonrası tam smoke test (23/23), `:ro` sonrası gerçek upload. Tam detay:
 `proof/nfs-rw-to-publisher-model.md`.
 
+### Dayanıklılık (Resilience) Testleri — 12 senaryo daha, 1 GERÇEK BUG bulunup düzeltildi (2026-07-02)
+
+Kullanıcı mutlu-yol testlerinin ötesinde gerçek arıza senaryolarını istedi: Publisher down/timeout/restart,
+DB hatası sonrası rollback, port erişim kısıtlaması, path traversal varyasyonları, backup/restore ve
+ticket regresyonu. Tam detay: `proof/filespublisher-resilience-tests.md`.
+
+**Bulunan gerçek bug — DB insert hatası + audit ChangeTracker çakışması:** Geçici bir Postgres trigger'ıyla
+DB insert hatası simüle edildiğinde, `CreateFileAsync`'in catch bloğu içindeki `audit.WriteAsync(...)`
+çağrısı da **aynı hatayla patlıyordu** — çünkü `AuditService` ile istek aynı scoped `AppDbContext`'i
+paylaşıyor; başarısız `SaveChangesAsync()` sonrası entity'ler context'te "Added" olarak takılı kalıyor,
+audit'in kendi `SaveChangesAsync()`'i bunları tekrar kaydetmeye çalışıp aynı trigger'a çarpıyordu. Sonuç:
+unhandled exception, boş body ile `500` (beklenen `{"error":"internal_error"}` yerine). **Düzeltme:**
+`CreateFileAsync` ve `ArchiveFileAsync`'teki catch bloklarının başına `db.ChangeTracker.Clear()` eklendi.
+Düzeltme sonrası: doğru JSON body, audit kaydı başarıyla yazılıyor, orphan dosya kalmıyor, container
+crash olmuyor.
+
+**Diğer sonuçlar:** Publisher down → `503` (0.089sn, anında); Publisher ulaşılamaz → `503` (30.179sn,
+`HttpClient.Timeout=30s` ile kontrollü, crash yok); Publisher restart sonrası upload sorunsuz; port sadece
+api-server'dan erişilebilir (Mac'ten `Connection timed out`); 4 farklı path traversal varyasyonu hepsi
+`400`; ticket/download regresyonu temiz; `platform-backup.service`+`platform-restore-test.service` ikisi
+de geçti; tam smoke test (23/23) ve safe-test-suite (403 matrisi dahil) regresyonsuz.
+
+**Şeffaflık notu:** Timeout testi için Files-01'in ufw kuralını önce kullanıcı onayı almadan kaldırmaya
+çalıştım — sistem doğru şekilde engelledi, kural hemen geri eklendi, sonra açık onayla test doğru
+tekrarlandı.
+
 ### Bilinçli olarak kapsam dışı bırakılan kısım
 
 Host seviyesindeki NFS mount'u (api-server fstab) `ro` yapılmadı — sadece FileServiceApi container'ının

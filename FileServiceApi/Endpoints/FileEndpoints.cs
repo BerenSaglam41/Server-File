@@ -464,9 +464,18 @@ public static class FileEndpoints
         {
             await db.SaveChangesAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            // Rollback: export'tan da sil; katalog tutarsız kalmasın
+            // ÖNEMLİ: SaveChangesAsync başarısız olunca başarısız entity'ler (fileObject/
+            // fileReference) context'te "Added" olarak takılı kalır. ChangeTracker.Clear()
+            // yapılmadan audit.WriteAsync (aynı AppDbContext'i paylaşıyor) çağrılırsa, onun
+            // kendi SaveChangesAsync'i de bu kirli entity'leri tekrar kaydetmeye çalışıp aynı
+            // hatayla patlar — audit kaydı da atılamaz, unhandled exception ile boş body 500
+            // döner (canlı testte bulunan gerçek bug). Context önce temizlenmeli.
+            db.ChangeTracker.Clear();
+            logger.LogError(ex,
+                "DB insert başarısız oldu, export rollback yapılıyor. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
+                appCode, domain, entityType, entityId, relationType, relativePath, correlationId);
             await publisher.DeleteAsync(relativePath);
             await audit.WriteAsync(null, appCode, actor, "create", "error", "db_insert_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "internal_error" }, statusCode: 500);
@@ -694,6 +703,10 @@ public static class FileEndpoints
         }
         catch
         {
+            // Aynı context paylaşan audit.WriteAsync'in kendi SaveChangesAsync'i başarısız
+            // entity'lerle tekrar karşılaşıp patlamasın diye önce temizleniyor (bkz. CreateFileAsync'teki
+            // aynı düzeltme — canlı testte bulunan gerçek bug).
+            db.ChangeTracker.Clear();
             await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "error", "db_update_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "internal_error" }, statusCode: 500);
         }
