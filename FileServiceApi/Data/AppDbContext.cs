@@ -105,6 +105,7 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Actor).HasColumnName("actor");
             entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
             entity.Property(e => e.UsedAt).HasColumnName("used_at");
+            entity.Property(e => e.UseCount).HasColumnName("use_count");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at");
         });
     }

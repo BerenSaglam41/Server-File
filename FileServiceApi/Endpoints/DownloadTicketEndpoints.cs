@@ -22,12 +22,18 @@ namespace FileServiceApi.Endpoints;
 // X-Accel-Redirect header'ı döner — nginx'in internal location'ı Files-01'in
 // salt-okunur mount'undan doğrudan servis eder. Bu istisna bilinçli: ticket
 // zaten oluşturulurken YonetimApi'nin RBAC kontrolünden geçmiş, kısa ömürlü,
-// tek kullanımlık — consume anında ek bir JWT/app_code kontrolüne ihtiyaç yok,
-// mTLS kimliği (CN=gateway) + ticket'ın kendi geçerliliği yeterli güvence.
-// Diğer tüm /internal/* endpoint'ler hem mTLS hem JWT istemeye devam ediyor.
+// süre+sayı sınırlı (lease) — consume anında ek bir JWT/app_code kontrolüne
+// ihtiyaç yok, mTLS kimliği (CN=gateway) + ticket'ın kendi geçerliliği yeterli
+// güvence. Diğer tüm /internal/* endpoint'ler hem mTLS hem JWT istemeye devam ediyor.
 public static class DownloadTicketEndpoints
 {
     private static readonly TimeSpan TicketLifetime = TimeSpan.FromSeconds(60);
+    // Lease modeli: ilk tüketimden sonra ticket hemen ölmüyor — LeaseDuration kadar
+    // daha, MaxUsesPerTicket'a kadar ek isteğe (özellikle Range — video/büyük PDF
+    // seeking) izin veriyor. S3 presigned URL / Google Signed URL'lerin de yaptığı
+    // gibi süre + sayı bazlı sınırlı bir model; sonsuz/kalıcı bir link değil.
+    private static readonly TimeSpan LeaseDuration = TimeSpan.FromSeconds(30);
+    private const int MaxUsesPerTicket = 20;
     private const string GatewayCn = "gateway";
 
     public static void MapDownloadTicketEndpoints(this WebApplication app)
@@ -130,17 +136,33 @@ public static class DownloadTicketEndpoints
         if (connection.State != System.Data.ConnectionState.Open)
             await connection.OpenAsync();
 
-        Guid fileId; string ticketAppCode; string? actor;
+        Guid fileId; string ticketAppCode; string? actor; int useCount;
         await using (var cmd = connection.CreateCommand())
         {
+            // Lease mantığı tek atomik UPDATE'te: ilk kullanım (used_at IS NULL) hâlâ
+            // orijinal kısa ömür (expires_at) penceresinde olmalı; sonraki kullanımlar
+            // (used_at zaten set) lease penceresinde (used_at + LeaseDuration) olmalı.
+            // Her iki durumda da use_count sınırının altında kalınmalı. Eşzamanlı "ilk
+            // kullanım" denemeleri Postgres'in satır kilidiyle doğal olarak sıraya girer;
+            // kaybeden istek used_at'i zaten set görüp otomatik olarak lease koluna düşer.
             cmd.CommandText =
-                "UPDATE files.download_tickets SET used_at = now() " +
-                "WHERE ticket_hash = @hash AND used_at IS NULL AND expires_at > now() " +
-                "RETURNING file_id, app_code, actor";
-            var p = cmd.CreateParameter();
-            p.ParameterName = "@hash";
-            p.Value = ticketHash;
-            cmd.Parameters.Add(p);
+                "UPDATE files.download_tickets SET used_at = COALESCE(used_at, now()), use_count = use_count + 1 " +
+                "WHERE ticket_hash = @hash AND use_count < @maxUses AND (" +
+                "  (used_at IS NULL AND expires_at > now())" +
+                "  OR (used_at IS NOT NULL AND now() < used_at + (@leaseSeconds * INTERVAL '1 second'))" +
+                ") RETURNING file_id, app_code, actor, use_count";
+            var pHash = cmd.CreateParameter();
+            pHash.ParameterName = "@hash";
+            pHash.Value = ticketHash;
+            cmd.Parameters.Add(pHash);
+            var pMaxUses = cmd.CreateParameter();
+            pMaxUses.ParameterName = "@maxUses";
+            pMaxUses.Value = MaxUsesPerTicket;
+            cmd.Parameters.Add(pMaxUses);
+            var pLeaseSeconds = cmd.CreateParameter();
+            pLeaseSeconds.ParameterName = "@leaseSeconds";
+            pLeaseSeconds.Value = LeaseDuration.TotalSeconds;
+            cmd.Parameters.Add(pLeaseSeconds);
 
             await using var reader = await cmd.ExecuteReaderAsync();
             if (!await reader.ReadAsync())
@@ -152,6 +174,7 @@ public static class DownloadTicketEndpoints
             fileId = reader.GetFieldValue<Guid>(0);
             ticketAppCode = reader.GetString(1);
             actor = reader.IsDBNull(2) ? null : reader.GetString(2);
+            useCount = reader.GetInt32(3);
         }
 
         var fileObject = await db.Objects.FindAsync(fileId);
@@ -161,7 +184,10 @@ public static class DownloadTicketEndpoints
             return Results.NotFound();
         }
 
-        await audit.WriteAsync(fileId, ticketAppCode, actor, "ticket_consume", "success", null, correlationId, clientIp, userAgent);
+        // İlk kullanımda reasonCode boş bırakılır (mevcut davranış); lease
+        // kapsamındaki tekrar kullanımlar "lease_use_N" ile ayırt edilebilir hale gelir.
+        var leaseReasonCode = useCount > 1 ? $"lease_use_{useCount}" : null;
+        await audit.WriteAsync(fileId, ticketAppCode, actor, "ticket_consume", "success", leaseReasonCode, correlationId, clientIp, userAgent);
 
         // Byte'ı burada okumuyoruz — nginx'in internal location'ına X-Accel-Redirect
         // ile yönlendiriyoruz, o Files-01'in salt-okunur mount'undan servis ediyor.
@@ -204,7 +230,7 @@ public static class DownloadTicketEndpoints
 
         await using (var diagCmd = connection.CreateCommand())
         {
-            diagCmd.CommandText = "SELECT file_id, app_code, used_at, expires_at FROM files.download_tickets WHERE ticket_hash = @hash";
+            diagCmd.CommandText = "SELECT file_id, app_code, used_at, expires_at, use_count FROM files.download_tickets WHERE ticket_hash = @hash";
             var p = diagCmd.CreateParameter();
             p.ParameterName = "@hash";
             p.Value = ticketHash;
@@ -217,8 +243,11 @@ public static class DownloadTicketEndpoints
                 diagAppCode = diagReader.GetString(1);
                 var usedAt = diagReader.IsDBNull(2) ? (DateTime?)null : diagReader.GetFieldValue<DateTime>(2);
                 var expiresAt = diagReader.GetFieldValue<DateTime>(3);
-                reasonCode = usedAt is not null ? "ticket_already_used"
-                    : expiresAt <= DateTime.UtcNow ? "ticket_expired"
+                var useCount = diagReader.GetInt32(4);
+
+                reasonCode = useCount >= MaxUsesPerTicket ? "ticket_max_uses_reached"
+                    : usedAt is null && expiresAt <= DateTime.UtcNow ? "ticket_expired"
+                    : usedAt is not null && DateTime.UtcNow >= usedAt.Value.Add(LeaseDuration) ? "ticket_lease_expired"
                     : "ticket_race_lost";
             }
         }

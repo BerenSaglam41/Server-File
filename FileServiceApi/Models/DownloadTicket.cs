@@ -8,5 +8,6 @@ public class DownloadTicket
     public string? Actor { get; set; }
     public DateTime ExpiresAt { get; set; }
     public DateTime? UsedAt { get; set; }
+    public int UseCount { get; set; }
     public DateTime CreatedAt { get; set; }
 }

@@ -2032,8 +2032,7 @@ Test L'nin bulduğu "süresi dolmuş ticket'lar birikir" sınırlaması, kritik 
 ### Bilinen sınırlamalar (V1, bilerek — test edilip doğrulandı)
 
 - Sadece personel (`YonetimApi`) tarafında var; FlotaApi'ye henüz taşınmadı.
-- Çoklu Range isteği (video/büyük dosya seeking) desteklenmiyor — tek ticket = tek HTTP isteği (Test K ile
-  doğrulandı). Gerekirse V2'de "lease" modeli değerlendirilir.
+- Çoklu Range isteği artık **destekleniyor** — bkz. aşağıdaki "Ticket Lease Modeli" bölümü (2026-07-02).
 - Logout, açık ticket'ları iptal etmiyor (Test N ile doğrulandı) — ömür kısa olduğu için bilinçli kabul,
   dokümante edildi.
 - Archive sonrası ticket tüketilip 404 dönüyor (Test M) — kabul edilebilir; istenirse ileride önce
@@ -2268,6 +2267,34 @@ container rebuild edildi, tam smoke test (23/23) regresyonsuz. Tam kanıt:
 
 ---
 
+## Ticket Lease Modeli — Süre + Sayı Sınırlı Çoklu Kullanım (TAMAMLANDI ✅ — 2026-07-02)
+
+Kullanıcı, önceki "kesin tek-kullanımlık" ticket modelinin yerine, S3 presigned URL / Google Signed
+URL'lerin kullandığı gibi süre+sayı sınırlı bir **lease** modeli kurulmasını istedi. Eski model, tarayıcının
+video/büyük PDF için doğal olarak yaptığı birden fazla Range isteğini desteklemiyordu (ikinci istek her
+zaman `404`).
+
+### Tasarım
+
+- `TicketLifetime` (60 sn, değişmedi): ticket'ın **ilk** kullanılması gereken pencere.
+- `LeaseDuration` (30 sn, yeni): ilk kullanımdan sonra **ek** isteklere izin verilen pencere.
+- `MaxUsesPerTicket` (20, yeni): süre sınırından bağımsız sert üst sınır.
+- Şema minimal tutuldu: mevcut `used_at` kolonu "ilk tüketim/lease başlangıcı" anlamına genişletildi, sadece
+  `use_count INT` eklendi. Tek atomik `UPDATE...RETURNING` ile concurrency-safe (Postgres satır kilidi
+  eşzamanlı "ilk kullanım" yarışını doğal olarak çözüyor, özel kod gerekmedi).
+
+### Doğrulama — 6 senaryo, hepsi geçti
+
+Hemen tekrar kullanım artık `200` (önceden `404` olurdu); aynı ticket'la 2 ayrı Range isteği ikisi de
+`206`; 22 ardışık istekte tam olarak ilk 20'si `200` kalanı `404` (`ticket_max_uses_reached` audit'te);
+lease süresi (30sn) dolunca `404` (`ticket_lease_expired`); hiç kullanılmamış ticket'ın ilk pencere süresi
+(60sn) dolunca hâlâ `404` (`ticket_expired`, değişmedi); **25 eşzamanlı istek** → tam olarak `20×200,
+5×404`, loglar temiz, crash yok. Tam smoke+safe-test-suite+backup/restore regresyonsuz. Frontend testi
+tekrarlanmadı (client kodu bu değişiklikte dokunulmadı, aynı URL'i aynı şekilde çağırıyor). Tam kanıt:
+`proof/download-ticket-lease-model.md`.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
@@ -2294,8 +2321,6 @@ container rebuild edildi, tam smoke test (23/23) regresyonsuz. Tam kanıt:
   mount'una `rw` yazıyor).
 - **V2 Download ticket'ının FlotaApi'ye taşınması**: personel tarafı (`YonetimApi`) TAMAMLANDI (bkz. yukarıdaki
   "Opak, Tek Kullanımlık İndirme Ticket'ı" bölümü); aynı desen FlotaApi/araç dosyaları için henüz eklenmedi.
-- **Ticket lease modeli**: şu an tek ticket = tek HTTP isteği (Range dahil). Büyük dosya/video için çoklu
-  Range gerekirse süreli "lease" modeli değerlendirilebilir (Test K).
 - **Sertifika rotasyonu**: `certs/generate-certs.sh` artık mevcut CA/sertifikaları varsayılan olarak ezmez; `FORCE_REGENERATE_CERTS=1` bilinçli rotasyon içindir. Gateway SAN değerleri `GATEWAY_DNS`/`GATEWAY_IPS` ile parametrelenir. Prod'da CA rotasyonu ayrı prosedürle yapılmalı.
 - **Fleet vehicle araması**: FlotaApi'ye `GET /api/vehicles?search=` endpoint'i eklenirse Dashboard'a araç listesi sidebar'ı eklenebilir (şu an yoktur — V2 adayı).
 

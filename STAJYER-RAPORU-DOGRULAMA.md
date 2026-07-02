@@ -83,7 +83,7 @@ dışa açmadan** (mevcut, doğrulanmış mTLS/internal-only sınırı korunarak
 uygulanmadı — bu hâlâ gerçek dosyalarda doğrulanamayan, FileServiceApi'yi mTLS sınırının dışına çıkaracak
 bir öneri olduğu için. Ticket, YonetimApi'nin kendi proxy'sinde tüketiliyor.
 
-**GÜNCELLEME 2 (2026-07-02) — Madde 9/10/11 (endpoint konumu) uygulandı, madde 9/12/13 (Gateway/X-Accel/lease) bilinçli olarak ertelendi:**
+**GÜNCELLEME 2 (2026-07-02) — Madde 9/10/11 (endpoint konumu) uygulandı, madde 9/12/13 (Gateway/X-Accel/lease) o an için bilinçli olarak ertelendi (sonradan GÜNCELLEME 3 ve `proof/x-accel-redirect-gateway.md` ile tamamlandı):**
 
 Kullanıcı raporun 9-13 maddelerini ("Gateway ticket consume: YOK", "POST /internal/download-tickets: YOK/
 farklı", "GET /internal/download-tickets/{ticket}/consume: YOK", "Lease modeli: YOK", "X-Accel entegrasyonu:
@@ -103,6 +103,20 @@ Bu taşıma sırasında **3. gerçek bug** bulundu: `files.audit_events.chk_acti
 `ticket_create`/`ticket_consume` action değerlerini reddediyordu — düzeltildi. Detaylar:
 `proof/download-ticket-sistemi.md` → "Taşıma Sonrası Testler", `PROJECT_STATUS.md` → "Ticket Yaşam
 Döngüsü FileServiceApi'ye Taşındı".
+
+**GÜNCELLEME 3 (2026-07-02) — Madde 12 (lease modeli) de artık uygulandı:**
+
+X-Accel-Redirect (madde 13, ayrı bir turda) tamamlandıktan sonra kullanıcı lease modelinin de yapılmasını
+istedi. Kaynak alıntısı yine uydurma ("Ticket Sözleşmesi" hâlâ yok), ama konsept (S3 presigned URL
+benzeri süre+sayı sınırlı çoklu kullanım) mantıklı bulunup uygulandı: `TicketLifetime` (60sn, ilk kullanım
+penceresi) + yeni `LeaseDuration` (30sn, ek kullanım penceresi) + yeni `MaxUsesPerTicket` (20, sert üst
+sınır). 6 senaryo test edildi (hemen tekrar kullanım, çoklu Range, max-uses sınırı, lease süresi dolumu,
+ilk kullanım süresi dolumu, 25 eşzamanlı istek) — hepsi geçti. Tam kanıt:
+`proof/download-ticket-lease-model.md`.
+
+Madde 9 (Gateway'in doğrudan tüketmesi) ve madde 13 (X-Accel) zaten daha önce ayrıca yapılmıştı (bkz.
+`proof/x-accel-redirect-gateway.md`). Geriye sadece FlotaApi'ye taşıma (ticket sisteminin araç dosyalarına
+genişletilmesi) kaldı — bu istenmedi, açık kapsam dışı.
 
 ---
 
