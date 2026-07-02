@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<AppPolicy> AppPolicies => Set<AppPolicy>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<RelationTypeConfig> RelationTypeConfigs => Set<RelationTypeConfig>();
+    public DbSet<DownloadTicket> DownloadTickets => Set<DownloadTicket>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -92,6 +93,19 @@ public class AppDbContext : DbContext
             entity.Property(e => e.RelationType).HasColumnName("relation_type");
             entity.Property(e => e.Cardinality).HasColumnName("cardinality");
             entity.Property(e => e.Description).HasColumnName("description");
+        });
+
+        modelBuilder.Entity<DownloadTicket>(entity =>
+        {
+            entity.ToTable("download_tickets");
+            entity.HasKey(e => e.TicketHash);
+            entity.Property(e => e.TicketHash).HasColumnName("ticket_hash");
+            entity.Property(e => e.FileId).HasColumnName("file_id");
+            entity.Property(e => e.AppCode).HasColumnName("app_code");
+            entity.Property(e => e.Actor).HasColumnName("actor");
+            entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(e => e.UsedAt).HasColumnName("used_at");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
         });
     }
 }

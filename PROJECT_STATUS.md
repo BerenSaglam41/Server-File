@@ -508,6 +508,28 @@ Başarılı liste dönüşünde `files.audit_events`'e `action=read, result=succ
 
 Test: 200 (liste), 401, 403.
 
+### `POST /internal/download-tickets` ✅ (2026-07-02 eklendi)
+Query: `fileId`. Kontrol sırası: JWT `app_code` claim → policy.can_read → object var mı ve `active` mi
+(404) → policy domain kontrolü (403) → 256-bit rastgele opak ticket üret → SHA256 hash'ini
+`files.download_tickets`'e yaz (ham ticket asla saklanmaz) → audit (`ticket_create`).
+
+Response: `{ ticket, expiresInSeconds }` — varsayılan ömür 60 saniye.
+
+Test: 200, 401 (appCode yok), 403 (policy/domain reddi), 404 (dosya yok/aktif değil).
+
+### `GET /internal/download-tickets/{ticket}/consume` ✅ (2026-07-02 eklendi)
+Ticket'ı hash'leyip atomik `UPDATE ... WHERE used_at IS NULL AND expires_at > now() RETURNING` ile
+tüketir (tek-kullanım garantisi — eşzamanlı 10 istekle test edildi, `1×200, 9×404`). Bulunursa
+`FileEndpoints.StreamContentAsync` (GetContentAsync ile paylaşılan) ile aynı ETag/Range/
+Content-Disposition davranışıyla stream eder. Bulunamazsa (yok/süresi dolmuş/zaten tüketilmiş) ayrı bir
+teşhis SELECT'iyle nedeni belirleyip `files.audit_events`'e `ticket_consume`/`denied`/
+(`ticket_not_found`|`ticket_expired`|`ticket_already_used`) yazar.
+
+Çağıran hâlâ sadece YonetimApi (servis token'ıyla) — bu endpoint FileServiceApi'yi Gateway'e veya
+istemciye açmıyor, `RequireAuthorization()` (JWT bearer) aynen duruyor.
+
+Test: 200/206 (başarılı, Range dahil), 404 (yok/süresi dolmuş/tekrar kullanım/uydurma/tamper edilmiş).
+
 ### Kritik not — AuditService fileId kuralı
 
 `fileId` parametresi, sadece nesnenin DB'de GERÇEKTEN var olduğu kesinleştikten **sonra** geçilmeli.
@@ -1933,9 +1955,9 @@ Kaynak olarak gösterdiği başlıklar (`Ticket Sözleşmesi`, `Ticket Store`, `
 Bu yüzden ticket konsepti alındı ama teslimat mekanizması bizim gerçek, zaten doğrulanmış güvenlik
 sınırımıza (FileServiceApi internal-only, mTLS zorunlu) uyacak şekilde uyarlandı.
 
-### Ne eklendi
+### Ne eklendi (İlk sürüm — sonradan FileServiceApi'ye taşındı, bkz. aşağıdaki "Ticket Yaşam Döngüsü FileServiceApi'ye Taşındı" bölümü)
 
-- `db/docker-init/04-download-tickets.sql` — `yonetim.download_tickets` tablosu: `ticket_hash` (PK, SHA256
+- `db/docker-init/04-download-tickets.sql` — `yonetim.download_tickets` tablosu (artık DROP edildi): `ticket_hash` (PK, SHA256
   hex, açık ticket asla saklanmaz), `personnel_id`, `file_id`, `actor`, `expires_at`, `used_at` (NULL =
   tüketilmedi).
 - `YonetimApi/Endpoints/DownloadTicketEndpoints.cs`:
@@ -2012,8 +2034,35 @@ Test L'nin bulduğu "süresi dolmuş ticket'lar birikir" sınırlaması, kritik 
   dokümante edildi.
 - Archive sonrası ticket tüketilip 404 dönüyor (Test M) — kabul edilebilir; istenirse ileride önce
   FileServiceApi'nin dosya durumunu kontrol edip sonra `used_at` set edilebilir, şart değil.
-- `relation_type` alanı ticket oluşturma sırasında bilinmediği için `"unknown"` olarak yazılıyor — fileId
-  bazlı akışta işlevsel bir etkisi yok, sadece kozmetik.
+
+### Ticket Yaşam Döngüsü FileServiceApi'ye Taşındı (2026-07-02)
+
+Kullanıcı, "düzeltme raporu"nun ticket'la ilgili endpoint konumu maddelerini (9-11: `POST
+/internal/download-tickets`, `GET /internal/download-tickets/{ticket}/consume`) işaret etti.
+Netleştirildi ve şu şekilde bölündü:
+
+- **Yapıldı:** Ticket'ın **konumu** taşındı — `yonetim.download_tickets` → `files.download_tickets`
+  (FileServiceApi'nin kendi `AppDbContext`'i), yeni endpoint'ler `POST /internal/download-tickets` ve
+  `GET /internal/download-tickets/{ticket}/consume` FileServiceApi'de. YonetimApi'nin client-facing
+  endpoint'leri (`/api/personnel/.../download-ticket`, `/api/personnel/download/{ticket}`) aynı kaldı,
+  artık sadece ince bir proxy (servis token'ıyla FileServiceApi'yi çağırıyor).
+- **Bilinçli olarak ertelendi (kullanıcı onayıyla):** Madde 9 (Gateway'in ticket'ı doğrudan tüketmesi) ve
+  madde 13 (X-Accel-Redirect ile byte'ın nginx'ten servis edilmesi) — bunlar Gateway container'ına
+  Files-01 NFS erişimi ve FileServiceApi'ye yeni, doğrulanmamış bir ağ yolu açmayı gerektirir, mevcut
+  doğrulanmış izolasyonu (FileServiceApi hâlâ dışa hiç açık değil) değiştirir. Madde 12 (lease modeli) de
+  aynı nedenle ayrı bırakıldı.
+- **Bulunan 3. gerçek bug:** `files.audit_events.chk_action` CHECK constraint'i sadece `create/read/
+  archive/delete_attempt` kabul ediyordu, yeni `ticket_create`/`ticket_consume` action'ları reddediliyordu
+  (`23514` Postgres hatası → ticket oluşturma `upstream_error`, tüketme `500` veriyordu). Constraint
+  genişletilip düzeltildi, `db/docker-init/05-download-tickets-fileservice.sql`'de kalıcı.
+- 15 test senaryosunun kritik bir alt kümesi (A-D, F-H, I-K, M) yeni mimaride tekrar çalıştırıldı, hepsi
+  geçti — özellikle J (10 eşzamanlı istek) bu kez ilk seferden temiz (`1×200, 9×404`, hiç exception yok).
+  Audit artık FileServiceApi'nin kendi `files.audit_events`'inde de teknik ticket olaylarını tutuyor
+  (`file-service-api-contract.md`'nin iki katmanlı audit ilkesine daha uygun).
+- **Bilinen tradeoff:** YonetimApi artık ticket tüketiminde `personnelId`'yi bilmiyor (bu artık
+  FileServiceApi'nin bilmediği bir domain kavramı); `yonetim.audit_events`'teki tüketim kaydı personel
+  kimliği yerine `"UNKNOWN"` yazıyor, teknik detay `files.audit_events`'te tam olarak var.
+- Tam kanıt: `proof/download-ticket-sistemi.md` → "Taşıma Sonrası Testler" bölümü.
 
 ---
 

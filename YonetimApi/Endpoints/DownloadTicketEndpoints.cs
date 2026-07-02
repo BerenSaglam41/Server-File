@@ -1,43 +1,39 @@
-using System.Security.Cryptography;
-using System.Text;
-using Npgsql;
+using System.Text.Json;
 using YonetimApi.Services;
 
 namespace YonetimApi.Endpoints;
 
-// Opak, kısa ömürlü, tek kullanımlık indirme ticket'ı.
-// Amaç: uzun ömürlü oturum cookie'sine ek olarak, tek bir dosyaya, tek seferliğine
-// bağlı, hash olarak saklanan, en az 256-bit entropili bir bilet üretmek — imzalı/
-// tek kullanımlık indirme linki (S3 presigned URL benzeri) deseni.
-//
-// FileServiceApi'nin dışa hiç açılmaması kuralı korunuyor: ticket YonetimApi'nin
-// kendi proxy zincirinden geçiyor, FileServiceApi'ye hâlâ sadece mTLS+servis
-// token'ı ile ulaşılıyor.
+// İnce proxy: ticket'ın kendisi (oluşturma + tüketme) artık FileServiceApi'de
+// yaşıyor (bkz. FileServiceApi/Endpoints/DownloadTicketEndpoints.cs,
+// /internal/download-tickets ve /internal/download-tickets/{ticket}/consume).
+// YonetimApi burada sadece iki şeyi yapar:
+//   1. Normal cookie auth + RBAC (CanReadAsync) + fileId-ownership kontrolü.
+//   2. FileServiceApi'ye servis token'ıyla proxy.
+// FileServiceApi'nin dışa hiç açılmaması kuralı korunuyor — Gateway/istemci
+// FileServiceApi'yi hâlâ hiç görmüyor, her şey bu proxy üzerinden geçiyor.
 public static class DownloadTicketEndpoints
 {
-    private static readonly TimeSpan TicketLifetime = TimeSpan.FromSeconds(60);
-
     public static void MapDownloadTicketEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/personnel");
 
         // Ticket oluşturma — normal cookie auth + RBAC gerektirir.
         group.MapPost("/{personnelId}/files/{fileId}/download-ticket",
-            (string personnelId, Guid fileId, HttpRequest req, NpgsqlDataSource db, IDomainAuditService a, IPermissionService p, IHttpClientFactory f, ITokenService t) =>
-                CreateTicketAsync(personnelId, fileId, req, db, a, p, f, t))
+            (string personnelId, Guid fileId, HttpRequest req, IDomainAuditService a, IPermissionService p, IHttpClientFactory f, ITokenService t) =>
+                CreateTicketAsync(personnelId, fileId, req, a, p, f, t))
             .RequireAuthorization();
 
         // Ticket tüketme — kimlik doğrulaması yok, ticket'ın kendisi yetkidir.
         group.MapGet("/download/{ticket}",
-            (string ticket, HttpContext ctx, NpgsqlDataSource db, IDomainAuditService a, IHttpClientFactory f, ITokenService t) =>
-                ConsumeTicketAsync(ticket, ctx, db, a, f, t))
+            (string ticket, HttpContext ctx, IDomainAuditService a, IHttpClientFactory f, ITokenService t) =>
+                ConsumeTicketAsync(ticket, ctx, a, f, t))
             .AllowAnonymous();
     }
 
     // ─── TICKET OLUŞTURMA ────────────────────────────────────────────────────
     private static async Task<IResult> CreateTicketAsync(
         string personnelId, Guid fileId, HttpRequest request,
-        NpgsqlDataSource db, IDomainAuditService audit, IPermissionService perm,
+        IDomainAuditService audit, IPermissionService perm,
         IHttpClientFactory httpClientFactory, ITokenService tokenService)
     {
         var actor = request.HttpContext.User.FindFirst("preferred_username")?.Value
@@ -60,29 +56,29 @@ public static class DownloadTicketEndpoints
             return Results.Json(new { error = "forbidden", reason = "file_scope_denied" }, statusCode: 403);
         }
 
-        // 256-bit (32 byte) rastgele opak ticket. Base64Url ile URL-safe.
-        var rawBytes = RandomNumberGenerator.GetBytes(32);
-        var rawTicket = Convert.ToBase64String(rawBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var ticketHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawTicket))).ToLowerInvariant();
-        var expiresAt = DateTime.UtcNow.Add(TicketLifetime);
+        var serviceToken = await tokenService.GetServiceTokenAsync();
+        var ticketReq = new HttpRequestMessage(HttpMethod.Post, $"internal/download-tickets?fileId={fileId}");
+        ticketReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
+        ticketReq.Headers.Add("X-Actor-User-Id", actor);
+        ticketReq.Headers.Add("X-Correlation-Id", correlationId);
 
-        await using var cmd = db.CreateCommand(
-            "INSERT INTO yonetim.download_tickets (ticket_hash, personnel_id, file_id, relation_type, actor, expires_at) " +
-            "VALUES ($1, $2, $3, $4, $5, $6)");
-        cmd.Parameters.AddWithValue(ticketHash);
-        cmd.Parameters.AddWithValue(personnelId);
-        cmd.Parameters.AddWithValue(fileId);
-        cmd.Parameters.AddWithValue("unknown"); // relation_type burada bilinmiyor, fileId bazlı erişimde önemli değil
-        cmd.Parameters.AddWithValue(actor);
-        cmd.Parameters.AddWithValue(expiresAt);
-        await cmd.ExecuteNonQueryAsync();
+        var resp = await client.SendAsync(ticketReq);
+        if (!resp.IsSuccessStatusCode)
+        {
+            await audit.WriteAsync(personnelId, actor, "PersonnelDownloadTicketCreated", "error", null, correlationId);
+            return Results.Json(new { error = "upstream_error" }, statusCode: (int)resp.StatusCode);
+        }
+
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var rawTicket = body.GetProperty("ticket").GetString()!;
+        var expiresInSeconds = body.GetProperty("expiresInSeconds").GetInt32();
 
         await audit.WriteAsync(personnelId, actor, "PersonnelDownloadTicketCreated", "success", null, correlationId);
 
         return Results.Ok(new
         {
             ticket = rawTicket,
-            expiresInSeconds = (int)TicketLifetime.TotalSeconds,
+            expiresInSeconds,
             downloadUrl = $"/api/personnel/download/{rawTicket}"
         });
     }
@@ -90,95 +86,38 @@ public static class DownloadTicketEndpoints
     // ─── TICKET TÜKETME (STREAM) ─────────────────────────────────────────────
     private static async Task ConsumeTicketAsync(
         string ticket, HttpContext httpContext,
-        NpgsqlDataSource db, IDomainAuditService audit,
-        IHttpClientFactory httpClientFactory, ITokenService tokenService)
+        IDomainAuditService audit, IHttpClientFactory httpClientFactory, ITokenService tokenService)
     {
         var response = httpContext.Response;
-        var ticketHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ticket))).ToLowerInvariant();
-
-        // Atomik tek-kullanım: sadece used_at NULL iken güncelle, aynı anda iki
-        // istek gelirse yalnızca biri satırı "kullanılmış" olarak işaretleyebilir.
-        // ÖNEMLİ: UPDATE komutu ve okuyucusu kendi using bloğunda TAM olarak
-        // kapatılmadan ikinci bir komut (diagnostic SELECT) açılmamalı — aksi
-        // halde eşzamanlı isteklerde Npgsql "a command is already in progress"
-        // hatası fırlatıyor (bu, canlı yük testiyle bulunup düzeltildi).
         var correlationId = Guid.NewGuid().ToString();
-        string? personnelId = null;
-        Guid fileId = Guid.Empty;
-        string? actor = null;
 
-        await using (var cmd = db.CreateCommand(
-            "UPDATE yonetim.download_tickets SET used_at = now() " +
-            "WHERE ticket_hash = $1 AND used_at IS NULL AND expires_at > now() " +
-            "RETURNING personnel_id, file_id, actor"))
-        {
-            cmd.Parameters.AddWithValue(ticketHash);
-            await using var reader = await cmd.ExecuteReaderAsync();
-            if (await reader.ReadAsync())
-            {
-                personnelId = reader.GetString(0);
-                fileId = reader.GetFieldValue<Guid>(1);
-                actor = reader.GetString(2);
-            }
-        } // cmd + reader burada tamamen kapanır, bağlantı pool'a temiz döner
-
-        if (personnelId is null)
-        {
-            // Atomik UPDATE 0 satır etkiledi — neden olduğunu (hiç yok / süresi
-            // dolmuş / zaten tüketilmiş) sadece audit amacıyla, TAMAMEN AYRI ve
-            // yukarıdaki komut kapandıktan sonra açılan bir SELECT'le öğreniyoruz.
-            // Bu SELECT tek-kullanım garantisinin bir parçası değil, yalnızca
-            // teşhis/audit içindir.
-            var diagPersonnelId = "UNKNOWN";
-            var reasonCode = "ticket_not_found";
-
-            await using (var diagCmd = db.CreateCommand(
-                "SELECT personnel_id, used_at, expires_at FROM yonetim.download_tickets WHERE ticket_hash = $1"))
-            {
-                diagCmd.Parameters.AddWithValue(ticketHash);
-                await using var diagReader = await diagCmd.ExecuteReaderAsync();
-                if (await diagReader.ReadAsync())
-                {
-                    diagPersonnelId = diagReader.GetString(0);
-                    var usedAt = diagReader.IsDBNull(1) ? (DateTime?)null : diagReader.GetFieldValue<DateTime>(1);
-                    var expiresAt = diagReader.GetFieldValue<DateTime>(2);
-                    reasonCode = usedAt is not null ? "ticket_already_used"
-                        : expiresAt <= DateTime.UtcNow ? "ticket_expired"
-                        : "ticket_race_lost";
-                }
-            }
-
-            await audit.WriteAsync(diagPersonnelId, "anonymous", "PersonnelDownloadTicketConsumed", "denied", reasonCode, correlationId);
-            response.StatusCode = 404;
-            await response.WriteAsJsonAsync(new { error = "not_found" });
-            return;
-        }
-
-        var resolvedActor = actor ?? "anonymous";
         var client = httpClientFactory.CreateClient("FileService");
         var serviceToken = await tokenService.GetServiceTokenAsync();
 
-        var contentReq = new HttpRequestMessage(HttpMethod.Get, $"internal/files/{fileId}/content");
-        contentReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
-        contentReq.Headers.Add("X-Actor-User-Id", resolvedActor);
-        contentReq.Headers.Add("X-Correlation-Id", correlationId);
+        var consumeReq = new HttpRequestMessage(HttpMethod.Get, $"internal/download-tickets/{Uri.EscapeDataString(ticket)}/consume");
+        consumeReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
+        consumeReq.Headers.Add("X-Correlation-Id", correlationId);
         // Not: ticket tek kullanımlıktır — bu, Range header'ı olsa bile TEK bir HTTP
         // isteğiyle sınırlıdır. Aynı ticket'la ikinci bir Range isteği (örn. video/PDF
         // parça parça okuma) 404 döner. V1'de "lease" (birden fazla Range isteğine izin
         // veren süreli oturum) yok — bilinçli karar, bkz. proof/download-ticket-sistemi.md.
         if (httpContext.Request.Headers.TryGetValue("Range", out var range))
-            contentReq.Headers.TryAddWithoutValidation("Range", range.ToString());
+            consumeReq.Headers.TryAddWithoutValidation("Range", range.ToString());
+        if (httpContext.Request.Headers.TryGetValue("If-None-Match", out var ifNoneMatch))
+            consumeReq.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch.ToString());
 
-        var resp = await client.SendAsync(contentReq, HttpCompletionOption.ResponseHeadersRead);
+        var resp = await client.SendAsync(consumeReq, HttpCompletionOption.ResponseHeadersRead);
         response.StatusCode = (int)resp.StatusCode;
 
-        if (!resp.IsSuccessStatusCode)
-        {
-            await audit.WriteAsync(personnelId, resolvedActor, "PersonnelDownloadTicketConsumed", "error", null, correlationId);
-            return;
-        }
+        // Audit burada domain seviyesinde: FileServiceApi zaten kendi
+        // files.audit_events'ine teknik ticket_consume kaydını yazıyor
+        // (iki katmanlı audit — bkz. file-service-api-contract.md).
+        var domainResult = resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.NotModified
+            ? "success" : resp.StatusCode == System.Net.HttpStatusCode.NotFound ? "denied" : "error";
+        await audit.WriteAsync("UNKNOWN", "anonymous", "PersonnelDownloadTicketConsumed", domainResult, null, correlationId);
 
-        await audit.WriteAsync(personnelId, resolvedActor, "PersonnelDownloadTicketConsumed", "success", null, correlationId);
+        if (!resp.IsSuccessStatusCode && resp.StatusCode != System.Net.HttpStatusCode.NotModified)
+            return;
 
         if (resp.Content.Headers.ContentType is not null)
             response.ContentType = resp.Content.Headers.ContentType.ToString();

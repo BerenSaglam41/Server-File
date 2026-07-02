@@ -1,8 +1,35 @@
 # Kanıt: Opak, Tek Kullanımlık İndirme Ticket Sistemi
 
-**Tarih:** 2026-07-02
-**Kapsam:** Personel dosyaları (YonetimApi) — fileId bazlı indirme
-**Durum:** ✅ 15 senaryo test edildi, 1 gerçek eşzamanlılık bug'ı bulunup düzeltildi, hepsi geçiyor
+**Tarih:** 2026-07-02 (ilk sürüm), 2026-07-02 (FileServiceApi'ye taşıma)
+**Kapsam:** Personel dosyaları — fileId bazlı indirme
+**Durum:** ✅ 15+7 senaryo test edildi, 3 gerçek bug bulunup düzeltildi, hepsi geçiyor
+
+---
+
+## Mimari Geçmişi (2 aşama)
+
+**Aşama 1 (ilk sürüm):** Ticket yaşam döngüsü (oluşturma+tüketme) tamamen YonetimApi'de,
+`yonetim.download_tickets` tablosunda yaşıyordu.
+
+**Aşama 2 (bu belgedeki "Taşıma Sonrası Testler" bölümü):** Kullanıcı, "düzeltme raporu"nun 9-13
+maddelerini işaret edip ticket'ın hedef konuma (`/internal/download-tickets`,
+`/internal/download-tickets/{ticket}/consume`) taşınmasını istedi. Aradaki fark netleştirildi ve kabul
+edildi: **Gateway'in ticket'ı doğrudan tüketmesi ve X-Accel-Redirect ile byte'ın nginx'ten servis
+edilmesi (madde 13) bilinçli olarak ayrı bir aşamaya bırakıldı** — bunlar Gateway'e Files-01 NFS erişimi
+ve FileServiceApi'ye yeni bir ağ yolu açmayı gerektirir, mevcut doğrulanmış izolasyonu değiştirir.
+Bu aşamada sadece ticket'ın **konumu** taşındı (YonetimApi → FileServiceApi), **çağıran hâlâ YonetimApi**
+(servis token'ıyla, mevcut güven sınırı korunarak).
+
+- Tablo: `yonetim.download_tickets` → `files.download_tickets` (FileServiceApi'nin kendi `AppDbContext`'i,
+  `personnel_id` yerine domain-agnostik `file_id`+`app_code` — ileride FlotaApi de aynı endpoint'i
+  kullanabilir).
+- Endpoint'ler: `POST /internal/download-tickets`, `GET /internal/download-tickets/{ticket}/consume`
+  (FileServiceApi üzerinde, `file-service-api-contract.md`'nin `/internal/files/*` desenine uygun).
+- YonetimApi'nin `/api/personnel/.../download-ticket` ve `/api/personnel/download/{ticket}` endpoint'leri
+  aynı kaldı (client/URL sözleşmesi değişmedi) — artık sadece ince bir proxy.
+- Audit artık iki katmanlı: FileServiceApi kendi `files.audit_events`'ine teknik `ticket_create`/
+  `ticket_consume` kaydı yazıyor (bu, `file-service-api-contract.md`'nin "iki katmanlı audit" ilkesine
+  ilk sürümden daha uygun).
 
 ---
 
@@ -241,8 +268,129 @@ container üzerinde** yapıldı (sunucu hiç kapatılmadan). Değişiklikler yer
 `git push origin main` ile GitHub'a gönderildi, sunucuda `git pull` ile senkronize edildi — üç tarafın
 (local/origin/server) `git rev-parse HEAD` değeri birebir aynı olduğu doğrulandı.
 
-## Mimari Not
+## Mimari Not (Aşama 1)
 
 `FileServiceApi` bu değişiklikten etkilenmedi — hâlâ dışa hiç açık değil, mTLS + servis token'ı
 zorunluluğu aynen duruyor. Ticket sistemi tamamen `YonetimApi`'nin kendi proxy katmanında, mevcut
 güvenlik sınırlarını koruyarak eklendi.
+
+---
+
+## Taşıma Sonrası Testler (Aşama 2 — Ticket FileServiceApi'de)
+
+### Bulunan ve Düzeltilen Bug #3: `files.audit_events` CHECK constraint
+
+İlk deploy'da ticket oluşturma `{"error":"upstream_error"}` döndü, ticket tüketme `500` verdi.
+FileServiceApi logları kök nedeni gösterdi:
+
+```
+Npgsql.PostgresException: 23514: new row for relation "audit_events" violates check constraint "chk_action"
+```
+
+**Kök neden:** `files.audit_events.chk_action` sadece `create, read, archive, delete_attempt`
+değerlerine izin veriyordu (bu oturumun çok daha önceki bir aşamasında "sadece files.audit_events'te
+CHECK constraint var" diye tespit edilmişti — bu kez o constraint'in kapsamı dışına çıkan yeni bir
+action değeri eklerken bunu gözden kaçırdım). Yeni `ticket_create`/`ticket_consume` action'ları bu
+listede yoktu.
+
+**Düzeltme:**
+```sql
+ALTER TABLE files.audit_events DROP CONSTRAINT IF EXISTS chk_action;
+ALTER TABLE files.audit_events ADD CONSTRAINT chk_action
+  CHECK (action::text = ANY (ARRAY['create','read','archive','delete_attempt','ticket_create','ticket_consume']::text[]));
+```
+`db/docker-init/05-download-tickets-fileservice.sql`'e eklendi, sunucuda uygulandı. Düzeltme sonrası
+tüm testler geçti.
+
+### A-D, I — Temel Davranış ve Tamper (Yeniden Test)
+
+Aynı sonuçlar, yeni mimaride de doğrulandı: ticket oluşturma `200`, cookie'siz tüketim `200` (110567
+byte), tekrar kullanım `404`, uydurma ticket `404`, tamper edilmiş ticket `404` (orijinal hâlâ `200`,
+henüz tüketilmemiş).
+
+### F, G — RBAC (Yeniden Test)
+
+p001 → P002 path'i: `403 access_denied`, ticket hiç oluşmadı. p001 → kendi dosyası: `200`.
+
+### H — DB Şeması (Yeniden Test, Yeni Konum)
+
+```
+Table "files.download_tickets"
+   Column    |           Type           | Nullable
+-------------+--------------------------+----------
+ ticket_hash | character varying(64)    | not null
+ file_id     | uuid                     | not null
+ app_code    | character varying(100)   | not null
+ actor       | character varying(200)   |
+ expires_at  | timestamp with time zone | not null
+ used_at     | timestamp with time zone |
+ created_at  | timestamp with time zone | not null
+```
+Açık ticket saklayan kolon yok, sadece hash — doğrulandı.
+
+### J — 10 Eşzamanlı İstek (Yeniden Test)
+
+```
+1 200
+9 404
+```
+Tam beklenen sonuç, **hiç regresyon yok** — bu kez `ConsumeTicketAsync` en baştan (ilk seferde bulduğum
+double-dispose bug'ından ders çıkarılarak) her komutu kendi temiz `using` bloğunda kapatacak şekilde
+yazıldı. FileServiceApi logları temiz (`grep -i exception` → sıfır sonuç).
+
+### K, M — Range ve Archive Etkileşimi (Yeniden Test)
+
+Range ile ilk istek → `206 Partial Content`; ikinci Range denemesi (aynı ticket) → `404` (değişmedi).
+Ticket alındıktan sonra dosya arşivlenirse → `404` (değişmedi).
+
+### Audit — İki Katman Ayrı Ayrı Doğrulandı
+
+```sql
+select action, result, reason_code, app_code, count(*) from files.audit_events
+where action like 'ticket%' group by action, result, reason_code, app_code order by action;
+```
+```
+     action     | result  |     reason_code     |  app_code  | count
+----------------+---------+---------------------+------------+-------
+ ticket_consume | denied  | ticket_already_used | yonetimapi |    10
+ ticket_consume | denied  | ticket_not_found    | unknown    |     2
+ ticket_consume | success |                     | yonetimapi |     3
+ ticket_create  | success |                     | yonetimapi |     4
+```
+`yonetim.audit_events`'te de `PersonnelDownloadTicketCreated`/`Consumed` kayıtları birikmeye devam
+ediyor — iki katman da çalışıyor.
+
+**Bilinen, kabul edilen tradeoff:** YonetimApi artık ticket tüketimi sırasında `personnelId`'yi bilmiyor
+(bu bilgi artık sadece FileServiceApi'nin ticket satırında `file_id`/`app_code` olarak var, `personnelId`
+FileServiceApi'nin hiç bilmediği bir domain kavramı). `yonetim.audit_events`'teki tüketim kaydı artık
+personel kimliği yerine `"UNKNOWN"` yazıyor. Teknik detay (hangi dosya, hangi app) `files.audit_events`'te
+tam olarak var; personel bazlı sorgulama isteniyorsa `file_id` üzerinden `files.references` ile join
+gerekir.
+
+### Regresyon Kontrolü
+
+`tools/server-smoke-test.sh` 23/23 `[OK]`. `tools/cleanup-download-tickets.sh` yeni tablo konumuna
+(`files.download_tickets`) karşı da doğru çalıştığı doğrulandı.
+
+### Gateway Hâlâ `/internal/download-tickets` Yolunu Engelliyor mu
+
+```bash
+curl -k -X POST 'https://localhost:5090/internal/download-tickets?fileId=...'
+```
+Sonuç: `http:404`. `nginx/nginx.conf`'taki `location /internal/ { return 404; }` kuralı toptan tüm
+`/internal/*` yollarını kapsadığı için yeni endpoint de otomatik korunuyor — nginx config'inde hiçbir
+değişiklik gerekmedi.
+
+### Deploy ve Senkronizasyon
+
+Her iki servis (`FileServiceApi`, `YonetimApi`) yerelde ayrı ayrı `dotnet build` ile derlendi, `scp` ile
+sunucuya kopyalanıp `docker compose up -d --build fileservice yonetimapi` ile canlıya alındı, tüm testler
+bu çalışan container'larda yapıldı.
+
+## Mimari Not (Aşama 2 — Güncel Durum)
+
+`FileServiceApi` artık `/internal/download-tickets*` endpoint'lerini sunuyor ama **hâlâ dışa hiç açık
+değil** — Gateway/istemci FileServiceApi'yi hâlâ hiç görmüyor, tek çağıran YonetimApi (servis token'ıyla).
+Madde 9 (Gateway ticket consume) ve madde 13 (X-Accel-Redirect) **bilinçli olarak yapılmadı** — bunlar
+Gateway'e Files-01 NFS erişimi açmayı ve FileServiceApi'ye yeni, doğrulanmamış bir ağ yolu eklemeyi
+gerektirir. Madde 12 (lease modeli) de aynı nedenle ayrı bırakıldı.

@@ -85,6 +85,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapFileEndpoints();
+app.MapDownloadTicketEndpoints();
 
 app.MapGet("/health", async (IConfiguration config, AppDbContext db) =>
 {

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Süresi dolmuş yonetim.download_tickets satırlarını temizler.
+# Süresi dolmuş files.download_tickets satırlarını temizler.
+#
+# Ticket yaşam döngüsü (oluşturma+tüketme) FileServiceApi'ye taşındığı için
+# tablo da yonetim.* değil files.* şemasında (bkz.
+# db/docker-init/05-download-tickets-fileservice.sql).
 #
 # Ticket satırları küçük (~200 byte) ve hacim düşük olduğu için kritik değil,
 # ama sınırsız birikmesin diye periyodik olarak (systemd timer ile günlük)
@@ -13,7 +17,7 @@ RETAIN_DAYS="${RETAIN_DAYS:-1}"
 
 RESULT=$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
   psql -U platform -d platformdb -c \
-  "DELETE FROM yonetim.download_tickets WHERE expires_at < now() - interval '${RETAIN_DAYS} day';" 2>&1) || {
+  "DELETE FROM files.download_tickets WHERE expires_at < now() - interval '${RETAIN_DAYS} day';" 2>&1) || {
   echo "[HATA] Ticket cleanup sorgusu basarisiz oldu: $RESULT" >&2
   exit 1
 }

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using FileServiceApi.Data;
+using FileServiceApi.Models;
 using FileServiceApi.Services;
 
 namespace FileServiceApi.Endpoints;
@@ -22,7 +23,7 @@ public static class FileEndpoints
         group.MapPost("/{fileId}/archive", ArchiveFileAsync);
     }
 
-    private static string? ExtractAppCode(ClaimsPrincipal user) =>
+    internal static string? ExtractAppCode(ClaimsPrincipal user) =>
         user.FindFirst("app_code")?.Value ?? user.FindFirst("azp")?.Value;
 
     // ─── RESOLVE ─────────────────────────────────────────────────────────────
@@ -202,6 +203,16 @@ public static class FileEndpoints
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
+        return await StreamContentAsync(request, response, fileObject, audit, config, appCode, actor, correlationId, clientIp, userAgent);
+    }
+
+    // DownloadTicketEndpoints da (ticket tüketimi sonrası) bu metodu kullanır —
+    // tek bir yerden ETag/Range/Content-Disposition davranışı garanti edilir.
+    internal static async Task<IResult> StreamContentAsync(
+        HttpRequest request, HttpResponse response, FileObject fileObject,
+        AuditService audit, IConfiguration config,
+        string appCode, string? actor, string? correlationId, string? clientIp, string? userAgent)
+    {
         var etag = $"\"sha256:{fileObject.Sha256}\"";
 
         var ifNoneMatch = request.Headers["If-None-Match"].FirstOrDefault();

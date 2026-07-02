@@ -61,6 +61,27 @@ dışa açmadan** (mevcut, doğrulanmış mTLS/internal-only sınırı korunarak
 uygulanmadı — bu hâlâ gerçek dosyalarda doğrulanamayan, FileServiceApi'yi mTLS sınırının dışına çıkaracak
 bir öneri olduğu için. Ticket, YonetimApi'nin kendi proxy'sinde tüketiliyor.
 
+**GÜNCELLEME 2 (2026-07-02) — Madde 9/10/11 (endpoint konumu) uygulandı, madde 9/12/13 (Gateway/X-Accel/lease) bilinçli olarak ertelendi:**
+
+Kullanıcı raporun 9-13 maddelerini ("Gateway ticket consume: YOK", "POST /internal/download-tickets: YOK/
+farklı", "GET /internal/download-tickets/{ticket}/consume: YOK", "Lease modeli: YOK", "X-Accel entegrasyonu:
+YOK") işaret edip bunların da yapılmasını istedi. Önce mimari tradeoff netleştirildi
+(`AskUserQuestion`): madde 9/13 (Gateway'in ticket'ı doğrudan tüketmesi + X-Accel-Redirect) Gateway
+container'ına Files-01 NFS erişimi ve FileServiceApi'ye yeni bir ağ yolu açmayı gerektiriyor — kullanıcı
+bunu **ayrı bir aşamaya bıraktı** ("x accel redirect'e sonra bakacağız"), önce sadece ticket'ın konumunun
+taşınmasını istedi.
+
+Yapılan: Ticket yaşam döngüsü `yonetim.download_tickets`'ten `files.download_tickets`'e, `YonetimApi`'den
+`FileServiceApi`'ye taşındı; `POST /internal/download-tickets` ve `GET /internal/download-tickets/{ticket}/
+consume` artık gerçekten var (madde 10/11'in hedeflediği konumda). Çağıran hâlâ YonetimApi — Gateway'in
+doğrudan çağırması (madde 9) ve X-Accel-Redirect (madde 13) hâlâ yapılmadı, bilinçli olarak. Lease modeli
+(madde 12) de aynı nedenle ayrı bırakıldı.
+
+Bu taşıma sırasında **3. gerçek bug** bulundu: `files.audit_events.chk_action` CHECK constraint'i yeni
+`ticket_create`/`ticket_consume` action değerlerini reddediyordu — düzeltildi. Detaylar:
+`proof/download-ticket-sistemi.md` → "Taşıma Sonrası Testler", `PROJECT_STATUS.md` → "Ticket Yaşam
+Döngüsü FileServiceApi'ye Taşındı".
+
 ---
 
 ## Madde 3 — Servis Auth: mTLS'in Kapsamı
