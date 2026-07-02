@@ -571,7 +571,7 @@ public static class PersonnelEndpoints
         return req;
     }
 
-    private static async Task<bool> FileBelongsToPersonnelAsync(
+    internal static async Task<bool> FileBelongsToPersonnelAsync(
         HttpClient client,
         ITokenService tokenService,
         string personnelId,
@@ -610,7 +610,7 @@ public static class PersonnelEndpoints
         [property: JsonPropertyName("classification")] string Classification,
         [property: JsonPropertyName("status")]         string Status);
 
-    private record OwnershipResult(
+    internal record OwnershipResult(
         [property: JsonPropertyName("owned")] bool Owned);
 
     private static string? ParseErrorCode(string body)

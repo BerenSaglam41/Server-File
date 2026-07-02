@@ -1912,6 +1912,66 @@ local commit), derlenen JS bundle'da `visibilitychange` string'i doğrulandı, t
 
 ---
 
+## Opak, Tek Kullanımlık İndirme Ticket'ı — Personel Dosyaları (TAMAMLANDI ✅ — 2026-07-02)
+
+Kullanıcı, endüstride yaygın "imzalı/tek kullanımlık indirme linki" (S3 presigned URL, Google Signed URL
+benzeri) deseninin projeye eklenmesini istedi. `file-service-api-contract.md`'nin kendi "V2 Download Ticket
+Opsiyonu" notundaki (kısa ömürlü, `file_id` bazlı, tek/sınırlı kullanım, varlık sızdırmayan) fikir esas
+alınarak, **mevcut güvenlik mimarisini bozmadan** (FileServiceApi hâlâ hiç dışa açılmıyor, mTLS+servis token'ı
+zorunluluğu aynen duruyor) YonetimApi'nin kendi proxy zinciri içinde uygulandı.
+
+### Neden literal V2 modeli (Client → FileServiceApi doğrudan) değil
+
+Bu oturumda projeye gönderilen bir "düzeltme raporu", ticket sisteminin Client'ın FileServiceApi'ye
+doğrudan gitmesini, Gateway'in ticket'ı doğrulamasını ve X-Accel-Redirect kullanılmasını öneriyordu.
+Kaynak olarak gösterdiği başlıklar (`Ticket Sözleşmesi`, `Ticket Store`, `Private Download Akışı`)
+`PROJE/` klasöründeki 5 gerçek dosyada **doğrulanamadı** — detaylar `STAJYER-RAPORU-DOGRULAMA.md`'de.
+Bu yüzden ticket konsepti alındı ama teslimat mekanizması bizim gerçek, zaten doğrulanmış güvenlik
+sınırımıza (FileServiceApi internal-only, mTLS zorunlu) uyacak şekilde uyarlandı.
+
+### Ne eklendi
+
+- `db/docker-init/04-download-tickets.sql` — `yonetim.download_tickets` tablosu: `ticket_hash` (PK, SHA256
+  hex, açık ticket asla saklanmaz), `personnel_id`, `file_id`, `actor`, `expires_at`, `used_at` (NULL =
+  tüketilmedi).
+- `YonetimApi/Endpoints/DownloadTicketEndpoints.cs`:
+  - `POST /api/personnel/{personnelId}/files/{fileId}/download-ticket` — normal cookie auth + RBAC
+    (`CanReadAsync`) + fileId-ownership kontrolü sonrası, `RandomNumberGenerator` ile **256-bit (32 byte)**
+    rastgele opak ticket üretir, SHA256 hash'ini DB'ye yazar, ham ticket'ı **sadece bir kez** client'a döner.
+    Varsayılan ömür: **60 saniye**.
+  - `GET /api/personnel/download/{ticket}` — **`AllowAnonymous`**, hiçbir cookie/JWT gerektirmez. Gelen
+    ticket hash'lenip DB'de aranır; **atomik** `UPDATE ... WHERE used_at IS NULL AND expires_at > now()`
+    ile tek-kullanım garantisi sağlanır (aynı anda iki istek gelirse yalnızca biri kazanır). Bulunursa
+    FileServiceApi'den mevcut mTLS+servis-token zinciriyle stream eder.
+  - `PersonnelEndpoints.FileBelongsToPersonnelAsync` ve `OwnershipResult` `internal` yapılıp tekrar
+    kullanıldı (kod tekrarı yok).
+
+### Doğrulama — sunucuda 7 canlı test, hepsi geçti
+
+1. Ticket oluşturma → `200`, 256-bit base64url ticket + `expiresInSeconds:60` döndü.
+2. Ticket ile **hiçbir cookie olmadan** indirme → `200`, doğru dosya (110567 byte) indi.
+3. Aynı ticket'ı tekrar kullanma → `404` (tek kullanımlık, DB'de ikinci `UPDATE` 0 satır etkiledi).
+4. Uydurma/var olmayan ticket → `404` (varlık sızdırmıyor).
+5. 60 saniyelik ticket'ı 65 saniye bekleyip kullanma → `404` (süre kontrolü çalışıyor).
+6. p001, P002'nin path'i üzerinden ticket istemeye çalıştı → `403 access_denied` (RBAC, ticket satırı hiç
+   oluşmadı — DB'den doğrulandı).
+7. p001 kendi dosyası için ticket istedi → `200` (pozitif kontrol).
+
+`yonetim.audit_events`'e `PersonnelDownloadTicketCreated`/`PersonnelDownloadTicketConsumed` olarak
+yazıldığı doğrudan SQL sorgusuyla doğrulandı. Tam smoke test tekrar çalıştırıldı, hiçbir regresyon yok.
+
+Test detayları ve kanıtları: `proof/download-ticket-sistemi.md`.
+
+### Bilinen sınırlamalar (V1, bilerek)
+
+- Sadece personel (`YonetimApi`) tarafında var; FlotaApi'ye henüz taşınmadı.
+- Süresi dolmuş/tüketilmiş ticket satırları DB'de birikir — otomatik temizlik (cron/job) yok, düşük hacimde
+  şu an sorun değil ama uzun vadede bir temizlik görevi eklenmeli.
+- `relation_type` alanı ticket oluşturma sırasında bilinmediği için `"unknown"` olarak yazılıyor — fileId
+  bazlı akışta işlevsel bir etkisi yok, sadece kozmetik.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
