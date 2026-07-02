@@ -55,7 +55,10 @@ Gateway (nginx): X-Accel-Redirect'i yakalar, /protected-download/ (internal, dı
 1. Ticket oluşturuldu, `downloadUrl: /files/download/<ticket>` döndü.
 2. Bu URL'e cookie'siz `GET` → `200`, `Content-Length: 110567`, doğru `Content-Type`/
    `Content-Disposition`. Doğrudan indirmeyle `diff` → **birebir aynı içerik**.
-3. Aynı ticket tekrar denendi → `404` (tek kullanım korunuyor, X-Accel'e rağmen değişmedi).
+3. Aynı ticket tekrar denendi → `404` (bu testin yapıldığı anda tek kullanım korunuyordu, X-Accel'e
+   rağmen değişmemişti). **⚠️ GÜNCELLEME (sonradan):** Lease modeli eklendikten sonra bu davranış
+   değişti — artık aynı ticket'la kısa bir süre + sınırlı sayıda tekrar istek başarılı oluyor, bkz.
+   `proof/download-ticket-lease-model.md`.
 4. `Range: bytes=0-99` ile indirme → `206 Partial Content`, `Content-Length: 100` — nginx'in kendi statik
    dosya sunumu Range'i doğru destekliyor.
 
@@ -88,10 +91,11 @@ kılınıyor**. Bu, nginx'in standart, belgelenmiş davranışı (X-Accel hedefi
 gönderdiği ETag'in önüne geçer).
 
 **Etki değerlendirmesi:** Fonksiyonel bir sorun değil — conditional GET/304 caching nginx'in kendi ETag
-şemasıyla hâlâ doğru çalışıyor (tek fark, format tutarsızlığı). Ayrıca ticket'lar tek kullanımlık olduğu
-için, FileServiceApi'nin kendi sha256-ETag/304 kısayolu zaten pratikte neredeyse hiç tetiklenmiyordu (aynı
-ticket'la ikinci istek zaten `404` alıyor) — bu X-Accel değişikliğinden önce de böyleydi. İstenirse V2'de
-nginx `add_header`/`$upstream_http_etag` ile sha256 ETag'i korunacak şekilde ayarlanabilir, ama şu an
+şemasıyla hâlâ doğru çalışıyor (tek fark, format tutarsızlığı). **⚠️ Güncelleme:** Bu bölüm yazıldığında
+ticket'lar hâlâ tek kullanımlıktı, bu yüzden "aynı ticket'la ikinci istek zaten 404 alıyor" deniyordu —
+lease modeli eklendikten sonra (bkz. `proof/download-ticket-lease-model.md`) aynı ticket'la tekrar
+istekler artık mümkün, dolayısıyla FileServiceApi'nin sha256-ETag/304 kısayolu lease penceresi içindeki
+tekrar isteklerde teorik olarak tetiklenebilir hale geldi (test edilmedi, düşük öncelik). İstenirse V2'de
 işlevsel bir öncelik değil.
 
 ## Kapsam Dışı (Bilinçli, Değişmedi)

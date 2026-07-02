@@ -582,8 +582,11 @@ MD gereksinimleri (`file-catalog-model.md` + `file-service-api-contract.md`) ile
 | `POST /api/personnel/{id}/attachment` | multi | Ek dosya yükleme — eskiler korunur |
 | `GET /api/personnel/{id}/files/{fileId}/content` | — | fileId bazlı stream (multi-primary dosyalar için) |
 | `POST /api/personnel/{id}/files/{fileId}/archive` | — | fileId bazlı arşivleme |
-| `POST /api/personnel/{id}/files/{fileId}/download-ticket` | — | Opak, 256-bit, tek kullanımlık indirme ticket'ı üretir (bkz. "Opak, Tek Kullanımlık İndirme Ticket'ı" bölümü) — normal cookie auth gerektirir |
-| `GET /api/personnel/download/{ticket}` | — | Ticket'ı tüketip dosyayı stream eder — **`AllowAnonymous`**, cookie/JWT gerekmez, ticket'ın kendisi yetkidir |
+| `POST /api/personnel/{id}/files/{fileId}/download-ticket` | — | Opak, 256-bit, lease modelli (süre+sayı sınırlı) indirme ticket'ı üretir — `downloadUrl: /files/download/{ticket}` döner — normal cookie auth gerektirir |
+
+**Not:** Eski `GET /api/personnel/download/{ticket}` (YonetimApi proxy) **artık yok** — X-Accel-Redirect
+eklendikten sonra kaldırıldı. Ticket artık doğrudan Gateway'in `GET /files/download/{ticket}` yoluna
+gidiyor (bkz. "X-Accel-Redirect ile Byte Delivery Gateway'e Taşındı" ve "Ticket Lease Modeli" bölümleri).
 
 Tüm endpoint'lerde:
 - `Authorization: Bearer <service-token>` — YonetimApi, Keycloak'tan aldığı service token'ı ekler (client bunu göremez/değiştiremez)
@@ -1944,6 +1947,12 @@ local commit), derlenen JS bundle'da `visibilitychange` string'i doğrulandı, t
 
 ## Opak, Tek Kullanımlık İndirme Ticket'ı — Personel Dosyaları (TAMAMLANDI ✅ — 2026-07-02)
 
+**⚠️ Not (başlık tarihsel):** Bu bölümün başlığı ilk sürümdeki adını koruyor (diğer belgelerden bu isimle
+referans alınıyor), ama sistem o zamandan beri evrildi: ticket artık **tek kullanımlık değil, lease
+modelli** (süre+sayı sınırlı çoklu kullanım) ve byte artık FileServiceApi/YonetimApi'den değil Gateway'den
+(X-Accel-Redirect) akıyor. Güncel mimari için bu dosyanın "Ticket Yaşam Döngüsü FileServiceApi'ye Taşındı",
+"X-Accel-Redirect ile Byte Delivery Gateway'e Taşındı" ve "Ticket Lease Modeli" bölümlerine bakın.
+
 Kullanıcı, endüstride yaygın "imzalı/tek kullanımlık indirme linki" (S3 presigned URL, Google Signed URL
 benzeri) deseninin projeye eklenmesini istedi. `file-service-api-contract.md`'nin kendi "V2 Download Ticket
 Opsiyonu" notundaki (kısa ömürlü, `file_id` bazlı, tek/sınırlı kullanım, varlık sızdırmayan) fikir esas
@@ -1996,8 +2005,9 @@ tekrar kullanım reddi (404), uydurma ticket reddi (404), süre dolumu reddi (40
   ortaya çıktı. **Düzeltme:** UPDATE komutu kendi `using` bloğunda temiz kapatılıp, teşhis amaçlı ikinci
   SELECT tamamen ayrı bir bloğa taşındı. Düzeltme sonrası tekrar test: `1×200, 9×404`, loglar temiz.
 - **K:** Range isteğiyle ilk tüketim → `206 Partial Content`; aynı ticket'la ikinci Range isteği → `404`
-  (tek-kullanım Range'i de kapsıyor — V1'de çoklu Range/"lease" modeli yok, bilinçli karar, dokümante
-  edildi).
+  (bu test anında tek-kullanım Range'i de kapsıyordu — o zamanki bilinçli V1 kararıydı). **⚠️ Artık geçerli
+  değil:** lease modeli eklendikten sonra (2026-07-02) aynı ticket'la çoklu Range isteği destekleniyor,
+  bkz. "Ticket Lease Modeli" bölümü ve `proof/download-ticket-lease-model.md`.
 - **L:** Süresi dolmuş ticket satırları **otomatik temizlenmiyor** (DB'de doğrulandı: 11 satır, 2'si süresi
   dolmuş ama hâlâ orada) — bilinen V1 sınırlaması, düşük hacimde risksiz.
 - **M:** Ticket alındıktan sonra dosya arşivlenirse → ticket tüketilir (`used_at` işaretlenir) ama içerik
@@ -2200,9 +2210,10 @@ FileServiceApi'nin `/internal/*` endpoint'leri normalde hem mTLS hem JWT service
 nginx, OAuth2 client_credentials akışıyla JWT alıp önbelleğe alamaz (YonetimApi/FlotaApi'nin .NET kodunda
 yaptığı gibi). Kullanıcıyla netleştirilip onaylanan çözüm: **sadece ticket-consume endpoint'ine**, sadece
 CN=gateway mTLS sertifikası için JWT gerektirmeyen dar bir istisna eklendi — çünkü bu endpoint yeni ticket
-oluşturmuyor, dosya yazmıyor/silmiyor, sadece zaten RBAC'tan geçmiş, kısa ömürlü, tek kullanımlık bir
-ticket'ı tüketip X-Accel-Redirect döndürüyor. **Diğer tüm `/internal/*` endpoint'ler (ticket oluşturma
-dahil) hem mTLS hem JWT istemeye devam ediyor** — test edilip doğrulandı.
+oluşturmuyor, dosya yazmıyor/silmiyor, sadece zaten RBAC'tan geçmiş, kısa ömürlü, süre+sayı sınırlı
+(lease modeli sonradan eklendi — bkz. "Ticket Lease Modeli" bölümü) bir ticket'ı tüketip X-Accel-Redirect
+döndürüyor. **Diğer tüm `/internal/*` endpoint'ler (ticket oluşturma dahil) hem mTLS hem JWT istemeye
+devam ediyor** — test edilip doğrulandı.
 
 ### Ne eklendi
 
@@ -2292,6 +2303,25 @@ lease süresi (30sn) dolunca `404` (`ticket_lease_expired`); hiç kullanılmamı
 5×404`, loglar temiz, crash yok. Tam smoke+safe-test-suite+backup/restore regresyonsuz. Frontend testi
 tekrarlanmadı (client kodu bu değişiklikte dokunulmadı, aynı URL'i aynı şekilde çağırıyor). Tam kanıt:
 `proof/download-ticket-lease-model.md`.
+
+### Ek doğrulama turu — DB seviyesinde + 2 yeni gerçek bulgu (henüz düzeltilmedi)
+
+Kullanıcının 7 sorusuyla DB seviyesinde tekrar doğrulandı: `use_count` gerçekten 20'de kalıyor, 21.
+istek audit'te `ticket_max_uses_reached`, lease sonrası reddedilen denemeler `use_count`'u artırmıyor,
+hiç kullanılmamış ticket'ın `used_at`'i gerçekten `NULL` kalıyor, Range+`Content-Range` doğru (`dd`+`diff`
+ile bit-bit doğrulandı).
+
+**2 yeni, gerçek, düzeltilmemiş bulgu:**
+- **`/files/download/` için rate limit yok** (`nginx.conf`'ta `limit_req`/`limit_conn` hiç yok) — bir
+  istemci geçerli bir ticket'ı max-uses sınırına kadar hızlıca tüketebilir, Gateway seviyesinde throttling
+  yok.
+- **Ham ticket, Gateway access log'unda düz metin olarak görünüyor** (`docker logs
+  server-file-gateway-1`) — DB'de sadece hash tutulsa da, URL path'in kendisi loglanıyor. S3 presigned URL
+  gibi sistemlerin bilinen, endüstri genelinde kabul edilen bir tradeoff'u; kısa ömür + dar kapsam riski
+  sınırlıyor ama sıfırlamıyor.
+
+İkisi de düzeltilmedi, V2 adayı olarak not edildi. Tam kanıt: `proof/download-ticket-lease-model.md` →
+"Ek Doğrulama Turu" bölümü.
 
 ---
 

@@ -80,6 +80,10 @@ etkileşimi, başarısız denemelerin audit'lenmesi). Bu ikinci tur **gerçek bi
 ```
 256-bit (32 byte) rastgele veriden base64url — URL-safe, yeterli entropi.
 
+**⚠️ Not:** `downloadUrl` formatı bu testin yapıldığı andaki gerçek çıktıydı. X-Accel-Redirect
+eklendikten sonra format `/files/download/{ticket}` olarak değişti (bkz.
+`proof/x-accel-redirect-gateway.md`); `/api/personnel/download/{ticket}` endpoint'i artık **hiç yok**.
+
 ## Test B — Cookie Olmadan Tüketim
 
 `http:200`, dosya boyutu `110567` byte, **hiçbir cookie kullanılmadan**.
@@ -170,16 +174,20 @@ Tam beklenen sonuç. Container logları temiz (`grep -i exception` → sıfır s
 
 ## Test K — Range İsteğiyle Tüketim
 
+**⚠️ GÜNCELLEME (2026-07-02, sonradan):** Bu testin sonucu ve aşağıdaki "V1, bilinçli" kararı **artık
+geçerli değil** — lease modeli eklendikten sonra aynı ticket'la ikinci bir Range isteği artık `404`
+DEĞİL, başarılı oluyor (lease penceresi + max-uses sınırı içinde). Güncel, doğru davranış için:
+`proof/download-ticket-lease-model.md` → "Test B — Çoklu Range İsteği". Aşağıdaki orijinal test sonucu,
+**o zamanki (lease öncesi) gerçek durumu** yansıtıyor, tarihsel kayıt olarak bırakıldı.
+
 ```
 1. istek: Range: bytes=0-9  → HTTP/1.1 206 Partial Content
-2. istek (aynı ticket, farklı Range): → http:404
+2. istek (aynı ticket, farklı Range): → http:404   [ARTIK GEÇERSİZ, bkz. yukarıdaki not]
 ```
 
-**Karar (V1, bilinçli):** Ticket tek kullanımlıktır ve bu, Range header'ı olsa bile **tek bir HTTP
-isteğiyle sınırlıdır**. Aynı ticket'la ikinci bir Range isteği (örn. video/PDF'i parça parça okuma) 404
-döner. Çok parçalı Range/seeking senaryosu desteklenecekse bir "lease" (süreli, birden fazla Range
-isteğine izin veren oturum) modeli gerekir — **V1'de yok, dosyalarımız (PDF/resim, ~100KB) tek istekte
-tamamen indiriliyor olduğundan şu an pratik bir kısıtlama değil.** V2 adayı.
+**O zamanki karar (V1, artık aşılmış):** Ticket tek kullanımlıktı ve bu, Range header'ı olsa bile tek bir
+HTTP isteğiyle sınırlıydı. Çok parçalı Range/seeking senaryosu için bir "lease" modeli gerektiği not
+edilmişti — bu ihtiyaç sonradan tam olarak karşılandı.
 
 ## Test L — Ticket Cleanup
 
@@ -340,8 +348,10 @@ yazıldı. FileServiceApi logları temiz (`grep -i exception` → sıfır sonuç
 
 ### K, M — Range ve Archive Etkileşimi (Yeniden Test)
 
-Range ile ilk istek → `206 Partial Content`; ikinci Range denemesi (aynı ticket) → `404` (değişmedi).
-Ticket alındıktan sonra dosya arşivlenirse → `404` (değişmedi).
+Range ile ilk istek → `206 Partial Content`; ikinci Range denemesi (aynı ticket) → `404` (o zaman
+değişmemişti). **⚠️ Lease modeli sonradan eklenince bu davranış değişti** — bkz.
+`proof/download-ticket-lease-model.md`. Ticket alındıktan sonra dosya arşivlenirse → `404` (bu davranış
+hâlâ geçerli, lease modelinden etkilenmedi — arşivlenmiş dosya her koşulda `404` döner).
 
 ### Audit — İki Katman Ayrı Ayrı Doğrulandı
 
@@ -387,10 +397,15 @@ Her iki servis (`FileServiceApi`, `YonetimApi`) yerelde ayrı ayrı `dotnet buil
 sunucuya kopyalanıp `docker compose up -d --build fileservice yonetimapi` ile canlıya alındı, tüm testler
 bu çalışan container'larda yapıldı.
 
-## Mimari Not (Aşama 2 — Güncel Durum)
+## Mimari Not (Aşama 2 — O Zamanki Durum, Artık Aşama 3/4 ile Aşıldı)
 
-`FileServiceApi` artık `/internal/download-tickets*` endpoint'lerini sunuyor ama **hâlâ dışa hiç açık
-değil** — Gateway/istemci FileServiceApi'yi hâlâ hiç görmüyor, tek çağıran YonetimApi (servis token'ıyla).
-Madde 9 (Gateway ticket consume) ve madde 13 (X-Accel-Redirect) **bilinçli olarak yapılmadı** — bunlar
-Gateway'e Files-01 NFS erişimi açmayı ve FileServiceApi'ye yeni, doğrulanmamış bir ağ yolu eklemeyi
-gerektirir. Madde 12 (lease modeli) de aynı nedenle ayrı bırakıldı.
+**⚠️ GÜNCELLEME (2026-07-02, sonradan):** Aşağıdaki paragraf, bu belgenin Aşama 2 turunda yazıldığı
+andaki gerçek durumu yansıtıyordu. Sonradan **hem Gateway/X-Accel hem lease modeli de yapıldı** — aşağıdaki
+"bilinçli olarak yapılmadı" ifadesi artık geçerli değil. Güncel mimari için:
+- Gateway/X-Accel-Redirect: `proof/x-accel-redirect-gateway.md`
+- Lease modeli: `proof/download-ticket-lease-model.md`
+
+Tarihsel kayıt (o zamanki gerçek durum): `FileServiceApi` `/internal/download-tickets*` endpoint'lerini
+sunuyordu ama dışa hiç açık değildi — Gateway/istemci FileServiceApi'yi hiç görmüyordu, tek çağıran
+YonetimApi'ydi (servis token'ıyla). Madde 9 (Gateway ticket consume) ve madde 13 (X-Accel-Redirect)
+o an bilinçli olarak yapılmamıştı; madde 12 (lease modeli) de aynı nedenle ayrı bırakılmıştı.

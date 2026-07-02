@@ -88,3 +88,89 @@ sınırlıyor. FileServiceApi logları temiz (`grep -i exception` → sıfır so
 - Lease parametreleri (`LeaseDuration=30sn`, `MaxUsesPerTicket=20`) hardcoded sabitler, `TicketLifetime`
   ile aynı desende — V1 için config'e taşınmadı.
 - FlotaApi'de hâlâ ticket sistemi yok, bu yüzden lease de sadece personel dosyaları için geçerli.
+
+---
+
+## Ek Doğrulama Turu — Kullanıcının 7 Sorusu (2026-07-02)
+
+### 1. DB'de `use_count` gerçekten 20'de kalıyor mu?
+
+22 ardışık istek sonrası doğrudan DB sorgusu:
+```
+ use_count |            used_at
+-----------+-------------------------------
+        20 | 2026-07-02 13:04:15.608917+00
+```
+**Evet — tam 20'de kalıyor**, 22 değil (fazladan 2 deneme reddedildiği için hiç artmadı).
+
+### 2. 21. istek audit'te `ticket_max_uses_reached` mı?
+
+```sql
+select action, result, reason_code from files.audit_events where reason_code='ticket_max_uses_reached' order by created_at desc limit 5;
+```
+```
+     action     | result |       reason_code
+----------------+--------+-------------------------
+ ticket_consume | denied | ticket_max_uses_reached   (x5, en yeni ikisi bu testin 21. ve 22. denemeleri)
+```
+**Evet.**
+
+### 3. Lease süresi dolduktan sonra `use_count` artmıyor mu?
+
+Ticket 1 kez kullanıldı, 35 sn (lease=30sn) beklendi, 3 kez daha denendi (hepsi `404`). DB:
+```
+ use_count |            used_at
+-----------+-------------------------------
+         1 | 2026-07-02 13:04:15.863153+00
+```
+**Evet — `use_count=1` kaldı**, reddedilen 3 deneme sayacı artırmadı (atomik `UPDATE`'in `WHERE` şartı
+sağlanmadığı için satır hiç güncellenmedi).
+
+### 4. Ticket hiç kullanılmadan 60 sn geçince `used_at` null kalıyor mu?
+
+Ticket oluşturulup hiç tüketilmeden 60+ sn beklendi. DB:
+```
+ use_count | used_at |          expires_at           | suresi_dolmus_mu
+-----------+---------+-------------------------------+------------------
+         0 |  (null) | 2026-07-02 13:05:50.962082+00 | t
+```
+**Evet — `used_at` gerçekten `NULL`**, `use_count=0`, `expires_at` geçmiş.
+
+### 5. X-Accel yolunda Range ile 206 + Content-Range doğru mu?
+
+`Range: bytes=100-299` isteğiyle:
+```
+HTTP/1.1 206 Partial Content
+Content-Length: 200
+Content-Range: bytes 100-299/110567
+```
+İndirilen 200 byte'lık parça, dosyanın gerçek 100-299 aralığıyla (`dd` ile çıkarılıp `diff` ile
+karşılaştırıldı) **birebir aynı** çıktı. **Evet, doğru.**
+
+### 6. `/files/download` için rate limit var mı?
+
+`nginx.conf`'ta `limit_req`/`limit_conn` **hiç yok** — ne `/files/download/` için ne genel olarak.
+**Hayır, rate limit yok.** Bu gerçek bir eksik: bir istemci, geçerli bir ticket'ı `MaxUsesPerTicket`
+sınırına kadar (20) çok hızlı art arda tüketebilir veya (RBAC'tan geçebiliyorsa) art arda çok sayıda
+ticket oluşturup tüketebilir — hiçbir Gateway seviyesi throttling yok. Ticket'ın kendi doğal sınırları
+(kısa ömür, RBAC gereksinimi, max-uses) kısmi bir koruma sağlıyor ama bu, IP/endpoint bazlı rate limit'in
+yerini tutmuyor. **Düzeltilmedi, V2 adayı olarak not edildi.**
+
+### 7. Gateway access log'da ticket açık yazılıyor mu?
+
+```
+172.18.0.1 - - [02/Jul/2026:13:07:36 +0000] "GET /files/download/YSulm825tOZead6H5OoK8-7Y9jbOp8-hrdkPbCjqERs HTTP/1.1" 200 110567 "-" "curl/8.18.0"
+```
+**Evet — ham ticket değeri access log'da düz metin olarak görünüyor** (`docker logs
+server-file-gateway-1`). DB'de sadece hash tutulsa da, URL path olarak taşındığı için access log'a
+kaçınılmaz şekilde yazılıyor. Bu, S3 presigned URL gibi query-string/path tabanlı imzalı link
+sistemlerinin **endüstri genelinde kabul edilen, bilinen bir tradeoff'u** — kısa ömür (60sn+lease) ve dar
+kapsam (tek dosya, RBAC sonrası) riski sınırlıyor ama sıfırlamıyor. **Düzeltilmedi, bilinen ve kabul
+edilebilir bir tradeoff olarak not edildi** (istenirse log'da ticket'ı maskeleyen bir nginx `map`/`log_format`
+ayarı V2'de eklenebilir).
+
+### Genel Sonuç
+
+Sorular 1-5: **tümü doğrulandı, sistem tasarlandığı gibi çalışıyor.** Sorular 6-7: **iki gerçek, düzeltilmemiş
+gözlem** — rate limit yok, ticket access log'da açık yazılıyor. İkisi de düzeltilmedi (kullanıcıya bildirildi,
+V2 adayı olarak işaretlendi).
