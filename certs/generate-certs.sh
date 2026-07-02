@@ -144,12 +144,17 @@ sign_client "filoapi"          "/CN=filoapi/O=Platform/OU=Internal"
 # CN=fileservice (fileservice.crt ile aynı kimlik) ama clientAuth EKU'lu — fileservice.crt
 # serverAuth için üretildiği için client tarafında yeniden kullanılamaz.
 sign_client "fileservice-client" "/CN=fileservice/O=Platform/OU=Internal"
+# Gateway'in FileServiceApi'nin ticket-consume endpoint'ini (X-Accel-Redirect için)
+# mTLS-only çağırabilmesi için ayrı bir client sertifikası. CN=gateway — FileServiceApi
+# bu CN'i JWT aranmadan kabul eder (bkz. DownloadTicketEndpoints.cs).
+sign_client "gateway-client" "/CN=gateway/O=Platform/OU=Internal"
 
 echo ""
 echo "=== Doğrulama ==="
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/fileservice.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/gateway.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/filespublisher.crt"
+openssl verify -CAfile "$DIR/ca.crt" "$DIR/gateway-client.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/yonetimapi.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/filoapi.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/fileservice-client.crt"

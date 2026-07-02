@@ -14,7 +14,7 @@ var serverCertPath = builder.Configuration["Mtls:ServerCertPath"];
 var serverKeyPath  = builder.Configuration["Mtls:ServerKeyPath"];
 var caCertPath     = builder.Configuration["Mtls:CaCertPath"];
 var allowedCNs     = (builder.Configuration.GetSection("Mtls:AllowedClientCNs").Get<string[]>()
-                      ?? ["yonetimapi", "filoapi"])
+                      ?? ["yonetimapi", "filoapi", "gateway"])
                      .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
 if (!string.IsNullOrEmpty(serverCertPath))

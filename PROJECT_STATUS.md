@@ -2178,10 +2178,71 @@ FileServiceApi'nin dosya sistemine hiç yazamaması) karşılandı ve kanıtland
 `restore-tests`'i tamamen ayrı NFS export'lara bölmek (planın "Sahiplik ve İzin Modeli" tablosu) ayrı,
 daha büyük bir hardening adımı — V2 adayı.
 
-### Hâlâ yapılmayan (bilinçli, ayrı bırakılan)
+### Byte Delivery Güncellemesi (2026-07-02): Ticket İndirmeleri İçin X-Accel-Redirect TAMAMLANDI
 
-Byte delivery hâlâ FileServiceApi'den akıyor — X-Accel-Redirect/Gateway entegrasyonu bu işin kapsamında
-değildi, ayrı bir görev (bkz. `STAJYER-RAPORU-DOGRULAMA.md` madde 1).
+Yukarıdaki not artık kısmen eskidi — ticket bazlı indirmeler için X-Accel-Redirect/Gateway entegrasyonu
+**yapıldı**. Detay için aşağıdaki "X-Accel-Redirect ile Byte Delivery Gateway'e Taşındı" bölümüne bakın.
+Ticket dışı, normal indirme endpoint'leri (`/api/personnel/{id}/cv/content` vb.) hâlâ eski V1 backend
+proxy akışını kullanıyor — bu bilinçli, çünkü `file-service-api-contract.md`'nin kendi ayrımına göre
+X-Accel/ticket modeli sadece "performans baskısı" senaryoları için V2 opsiyonu, V1 baseline'ı değiştirmiyor.
+
+---
+
+## X-Accel-Redirect ile Byte Delivery Gateway'e Taşındı (TAMAMLANDI ✅ — 2026-07-02)
+
+Kullanıcı `file-service-api-contract.md`'nin "byte delivery File-Service'ten geçmemeli" hedefini ticket
+tabanlı indirmeler için gerçekleştirmek istedi. Önceden bu (Gateway'e NFS erişimi ve FileServiceApi'ye
+yeni bir güven sınırı gerektirdiği için) ayrı bir aşamaya bırakılmıştı; bu oturumda tasarım netleştirilip
+onaylı şekilde uygulandı.
+
+### Kritik tasarım kararı: mTLS-only istisna
+
+FileServiceApi'nin `/internal/*` endpoint'leri normalde hem mTLS hem JWT service token istiyor. Ama düz
+nginx, OAuth2 client_credentials akışıyla JWT alıp önbelleğe alamaz (YonetimApi/FlotaApi'nin .NET kodunda
+yaptığı gibi). Kullanıcıyla netleştirilip onaylanan çözüm: **sadece ticket-consume endpoint'ine**, sadece
+CN=gateway mTLS sertifikası için JWT gerektirmeyen dar bir istisna eklendi — çünkü bu endpoint yeni ticket
+oluşturmuyor, dosya yazmıyor/silmiyor, sadece zaten RBAC'tan geçmiş, kısa ömürlü, tek kullanımlık bir
+ticket'ı tüketip X-Accel-Redirect döndürüyor. **Diğer tüm `/internal/*` endpoint'ler (ticket oluşturma
+dahil) hem mTLS hem JWT istemeye devam ediyor** — test edilip doğrulandı.
+
+### Ne eklendi
+
+- Gateway'e **yeni bir NFS bağlantısı açılmadı** — api-server'da zaten var olan `ro` host mount'u
+  (`/mnt/platform-files/export`) Gateway container'ına salt-okunur bind-mount edildi.
+- `certs/generate-certs.sh`: `gateway-client` (CN=gateway, clientAuth) sertifikası eklendi.
+- `FileServiceApi/Endpoints/DownloadTicketEndpoints.cs → ConsumeTicketAsync`: Artık byte okumuyor; mTLS
+  sertifikasının CN'ini kontrol edip (`gateway` değilse `403`, audit'e `gateway_cn_required` yazılır),
+  ticket'ı atomik tüketip `X-Accel-Redirect: /protected-download/{relativePath}` header'ı dönüyor.
+- `nginx/nginx.conf`: `/files/download/{ticket}` (FileServiceApi'yi mTLS ile çağırır) ve
+  `/protected-download/` (`internal`, dışarıdan asla erişilmez) location'ları eklendi.
+- `YonetimApi/Endpoints/DownloadTicketEndpoints.cs`: Eski `GET /api/personnel/download/{ticket}` proxy
+  endpoint'i **tamamen kaldırıldı** (Gateway artık doğrudan çağırıyor); `downloadUrl` artık
+  `/files/download/{ticket}` döner.
+
+### Doğrulama
+
+Uçtan uca: ticket alındı → yeni Gateway URL'inden cookie'siz indirme → `200`, içerik doğrudan indirmeyle
+`diff` ile birebir aynı → tekrar kullanım `404` (değişmedi) → `Range: bytes=0-99` → `206`. Güvenlik: eski
+proxy endpoint `404` (kaldırıldı), `/protected-download/` dışarıdan `404`, `/internal/` toptan blok hâlâ
+çalışıyor, TLS'i geçmeyen CN (fileservice) reddedildi, TLS'i geçen ama gateway olmayan CN (yonetimapi)
+uygulama seviyesinde `403` + audit'te `gateway_cn_required`/`app_code=yonetimapi` kaydı, başarılı
+consume'lar audit'te `app_code=gateway` ile doğru işaretleniyor, ticket CREATE endpoint'i geçerli
+"gateway" mTLS sertifikasıyla bile JWT'siz `401` veriyor (diğer endpoint'lerin etkilenmediği kanıtı). Tam
+smoke test (23/23), safe-test-suite (403 matrisi dahil) ve backup/restore-test regresyonsuz geçti. Tam
+kanıt: `proof/x-accel-redirect-gateway.md`.
+
+### Bilinen kozmetik fark
+
+X-Accel yolunda nginx, dosyayı kendi statik dosya modülüyle sunduğu için **kendi ETag'ini** (mtime+size
+tabanlı) üretiyor — FileServiceApi'nin sha256 tabanlı `ETag`'i bu path'te nginx'in ürettiğiyle
+değiştiriliyor (standart, belgelenmiş nginx davranışı). Fonksiyonel bir sorun değil (conditional GET/304
+nginx'in kendi şemasıyla hâlâ çalışıyor); istenirse V2'de düzeltilebilir.
+
+### Kapsam dışı (bilinçli)
+
+Ticket dışı normal indirme endpoint'leri hâlâ V1 backend proxy akışını kullanıyor (bilinçli, yukarıya
+bakın). Client React uygulaması ticket sistemini hiç kullanmıyor (backend-only, doğrulandı) — bu değişiklik
+hiçbir frontend kodunu etkilemedi.
 
 ---
 

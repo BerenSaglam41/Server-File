@@ -3,31 +3,24 @@ using YonetimApi.Services;
 
 namespace YonetimApi.Endpoints;
 
-// İnce proxy: ticket'ın kendisi (oluşturma + tüketme) artık FileServiceApi'de
-// yaşıyor (bkz. FileServiceApi/Endpoints/DownloadTicketEndpoints.cs,
-// /internal/download-tickets ve /internal/download-tickets/{ticket}/consume).
-// YonetimApi burada sadece iki şeyi yapar:
-//   1. Normal cookie auth + RBAC (CanReadAsync) + fileId-ownership kontrolü.
-//   2. FileServiceApi'ye servis token'ıyla proxy.
-// FileServiceApi'nin dışa hiç açılmaması kuralı korunuyor — Gateway/istemci
-// FileServiceApi'yi hâlâ hiç görmüyor, her şey bu proxy üzerinden geçiyor.
+// Ticket oluşturma burada — normal cookie auth + RBAC (CanReadAsync) + fileId-
+// ownership kontrolü sonrası FileServiceApi'ye servis token'ıyla proxy.
+//
+// Ticket TÜKETME artık burada değil — client, ticket'ı doğrudan Gateway'in
+// `/files/download/{ticket}` yoluna götürür; Gateway (mTLS, CN=gateway) ile
+// FileServiceApi'yi çağırır, dönen X-Accel-Redirect ile byte'ı kendi salt-okunur
+// mount'undan servis eder. YonetimApi/FileServiceApi artık bu byte'ı hiç
+// görmüyor (bkz. nginx/nginx.conf, FileServiceApi/Endpoints/DownloadTicketEndpoints.cs).
 public static class DownloadTicketEndpoints
 {
     public static void MapDownloadTicketEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/personnel");
 
-        // Ticket oluşturma — normal cookie auth + RBAC gerektirir.
         group.MapPost("/{personnelId}/files/{fileId}/download-ticket",
             (string personnelId, Guid fileId, HttpRequest req, IDomainAuditService a, IPermissionService p, IHttpClientFactory f, ITokenService t) =>
                 CreateTicketAsync(personnelId, fileId, req, a, p, f, t))
             .RequireAuthorization();
-
-        // Ticket tüketme — kimlik doğrulaması yok, ticket'ın kendisi yetkidir.
-        group.MapGet("/download/{ticket}",
-            (string ticket, HttpContext ctx, IDomainAuditService a, IHttpClientFactory f, ITokenService t) =>
-                ConsumeTicketAsync(ticket, ctx, a, f, t))
-            .AllowAnonymous();
     }
 
     // ─── TICKET OLUŞTURMA ────────────────────────────────────────────────────
@@ -79,58 +72,7 @@ public static class DownloadTicketEndpoints
         {
             ticket = rawTicket,
             expiresInSeconds,
-            downloadUrl = $"/api/personnel/download/{rawTicket}"
+            downloadUrl = $"/files/download/{rawTicket}"
         });
-    }
-
-    // ─── TICKET TÜKETME (STREAM) ─────────────────────────────────────────────
-    private static async Task ConsumeTicketAsync(
-        string ticket, HttpContext httpContext,
-        IDomainAuditService audit, IHttpClientFactory httpClientFactory, ITokenService tokenService)
-    {
-        var response = httpContext.Response;
-        var correlationId = Guid.NewGuid().ToString();
-
-        var client = httpClientFactory.CreateClient("FileService");
-        var serviceToken = await tokenService.GetServiceTokenAsync();
-
-        var consumeReq = new HttpRequestMessage(HttpMethod.Get, $"internal/download-tickets/{Uri.EscapeDataString(ticket)}/consume");
-        consumeReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
-        consumeReq.Headers.Add("X-Correlation-Id", correlationId);
-        // Not: ticket tek kullanımlıktır — bu, Range header'ı olsa bile TEK bir HTTP
-        // isteğiyle sınırlıdır. Aynı ticket'la ikinci bir Range isteği (örn. video/PDF
-        // parça parça okuma) 404 döner. V1'de "lease" (birden fazla Range isteğine izin
-        // veren süreli oturum) yok — bilinçli karar, bkz. proof/download-ticket-sistemi.md.
-        if (httpContext.Request.Headers.TryGetValue("Range", out var range))
-            consumeReq.Headers.TryAddWithoutValidation("Range", range.ToString());
-        if (httpContext.Request.Headers.TryGetValue("If-None-Match", out var ifNoneMatch))
-            consumeReq.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch.ToString());
-
-        var resp = await client.SendAsync(consumeReq, HttpCompletionOption.ResponseHeadersRead);
-        response.StatusCode = (int)resp.StatusCode;
-
-        // Audit burada domain seviyesinde: FileServiceApi zaten kendi
-        // files.audit_events'ine teknik ticket_consume kaydını yazıyor
-        // (iki katmanlı audit — bkz. file-service-api-contract.md).
-        var domainResult = resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.NotModified
-            ? "success" : resp.StatusCode == System.Net.HttpStatusCode.NotFound ? "denied" : "error";
-        await audit.WriteAsync("UNKNOWN", "anonymous", "PersonnelDownloadTicketConsumed", domainResult, null, correlationId);
-
-        if (!resp.IsSuccessStatusCode && resp.StatusCode != System.Net.HttpStatusCode.NotModified)
-            return;
-
-        if (resp.Content.Headers.ContentType is not null)
-            response.ContentType = resp.Content.Headers.ContentType.ToString();
-        if (resp.Content.Headers.ContentLength.HasValue)
-            response.ContentLength = resp.Content.Headers.ContentLength.Value;
-        if (resp.Content.Headers.TryGetValues("Content-Disposition", out var cd))
-            response.Headers["Content-Disposition"] = cd.ToArray();
-        if (resp.Headers.TryGetValues("ETag", out var etag))
-            response.Headers["ETag"] = etag.ToArray();
-        if (resp.Content.Headers.TryGetValues("Content-Range", out var cr))
-            response.Headers["Content-Range"] = cr.ToArray();
-        response.Headers["Accept-Ranges"] = "bytes";
-
-        await resp.Content.CopyToAsync(response.Body);
     }
 }

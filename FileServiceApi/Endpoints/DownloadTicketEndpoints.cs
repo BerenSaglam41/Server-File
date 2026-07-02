@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using FileServiceApi.Data;
@@ -10,20 +12,34 @@ namespace FileServiceApi.Endpoints;
 // Ticket yaşam döngüsü (oluşturma + tüketme) burada, dosya kataloğuyla aynı
 // serviste yaşıyor — hedef konum file-service düzeltme talebindeki
 // `/internal/download-tickets` ve `/internal/download-tickets/{ticket}/consume`
-// ile birebir. Bu aşamada çağıran hâlâ YonetimApi/FlotaApi (servis token'ıyla,
-// mevcut AppCaller güven sınırı) — Gateway'in doğrudan tüketmesi ve
-// X-Accel-Redirect ile byte'ın nginx'ten servis edilmesi bilinçli olarak
-// ayrı bir aşamaya bırakıldı (bkz. PROJECT_STATUS.md).
+// ile birebir.
+//
+// Oluşturma (POST) hâlâ normal AppCaller güven sınırında — mTLS + JWT service
+// token gerektirir (YonetimApi/FlotaApi).
+//
+// Tüketme (GET .../consume) artık SADECE Gateway tarafından, SADECE mTLS ile
+// (CN=gateway, JWT gerekmez) çağrılır ve byte'ı kendisi okumak yerine
+// X-Accel-Redirect header'ı döner — nginx'in internal location'ı Files-01'in
+// salt-okunur mount'undan doğrudan servis eder. Bu istisna bilinçli: ticket
+// zaten oluşturulurken YonetimApi'nin RBAC kontrolünden geçmiş, kısa ömürlü,
+// tek kullanımlık — consume anında ek bir JWT/app_code kontrolüne ihtiyaç yok,
+// mTLS kimliği (CN=gateway) + ticket'ın kendi geçerliliği yeterli güvence.
+// Diğer tüm /internal/* endpoint'ler hem mTLS hem JWT istemeye devam ediyor.
 public static class DownloadTicketEndpoints
 {
     private static readonly TimeSpan TicketLifetime = TimeSpan.FromSeconds(60);
+    private const string GatewayCn = "gateway";
 
     public static void MapDownloadTicketEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/internal/download-tickets").RequireAuthorization();
+        var group = app.MapGroup("/internal/download-tickets");
 
-        group.MapPost("", CreateTicketAsync);
-        group.MapGet("/{ticket}/consume", ConsumeTicketAsync);
+        group.MapPost("", CreateTicketAsync).RequireAuthorization();
+
+        // AllowAnonymous: JWT bearer şeması burada aranmaz, kimlik doğrulaması
+        // tamamen mTLS istemci sertifikası (Kestrel seviyesinde zaten CA'ya karşı
+        // doğrulanmış) üzerinden, handler içinde CN kontrolüyle yapılır.
+        group.MapGet("/{ticket}/consume", ConsumeTicketAsync).AllowAnonymous();
     }
 
     // ─── OLUŞTURMA ───────────────────────────────────────────────────────────
@@ -84,15 +100,26 @@ public static class DownloadTicketEndpoints
         return Results.Ok(new { ticket = rawTicket, expiresInSeconds = (int)TicketLifetime.TotalSeconds });
     }
 
-    // ─── TÜKETME (STREAM) ────────────────────────────────────────────────────
+    // ─── TÜKETME (X-Accel-Redirect) ──────────────────────────────────────────
     private static async Task<IResult> ConsumeTicketAsync(
         string ticket, HttpRequest request, HttpResponse response,
-        AppDbContext db, AuditService audit, IConfiguration config)
+        AppDbContext db, AuditService audit)
     {
-        var appCode = FileEndpoints.ExtractAppCode(request.HttpContext.User) ?? "unknown";
         var correlationId = request.Headers["X-Correlation-Id"].FirstOrDefault();
         var clientIp = request.Headers["X-Client-IP"].FirstOrDefault();
         var userAgent = request.Headers["User-Agent"].FirstOrDefault();
+
+        // mTLS-only kimlik doğrulama: Kestrel bu bağlantıyı zaten CA'ya karşı
+        // doğruladı (RequireCertificate + CustomRootTrust) — burada sadece CN'in
+        // gerçekten "gateway" olduğunu kontrol ediyoruz. JWT aranmıyor.
+        var clientCert = request.HttpContext.Connection.ClientCertificate;
+        var cn = clientCert?.GetNameInfo(X509NameType.SimpleName, false);
+        if (!string.Equals(cn, GatewayCn, StringComparison.OrdinalIgnoreCase))
+        {
+            await audit.WriteAsync(null, cn ?? "unknown", null, "ticket_consume", "denied", "gateway_cn_required", correlationId, clientIp, userAgent);
+            return Results.Json(new { error = "forbidden" }, statusCode: 403);
+        }
+        var appCode = GatewayCn;
         var ticketHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ticket))).ToLowerInvariant();
 
         // Atomik tek-kullanım: raw SQL UPDATE...RETURNING, EF change-tracking'in
@@ -136,7 +163,33 @@ public static class DownloadTicketEndpoints
 
         await audit.WriteAsync(fileId, ticketAppCode, actor, "ticket_consume", "success", null, correlationId, clientIp, userAgent);
 
-        return await FileEndpoints.StreamContentAsync(request, response, fileObject, audit, config, appCode, actor, correlationId, clientIp, userAgent);
+        // Byte'ı burada okumuyoruz — nginx'in internal location'ına X-Accel-Redirect
+        // ile yönlendiriyoruz, o Files-01'in salt-okunur mount'undan servis ediyor.
+        var etag = $"\"sha256:{fileObject.Sha256}\"";
+        var ifNoneMatch = request.Headers["If-None-Match"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(ifNoneMatch) && ifNoneMatch == etag)
+        {
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", "not_modified", correlationId, clientIp, userAgent);
+            return Results.StatusCode(304);
+        }
+
+        var rawName = string.IsNullOrEmpty(fileObject.OriginalFileName)
+            ? $"file.{fileObject.Extension}"
+            : fileObject.OriginalFileName;
+        var asciiFallback = new string(rawName.Select(c => (c < 128 && c != '"' && c != '\\') ? c : '_').ToArray());
+        var encodedName = Uri.EscapeDataString(rawName);
+        var imageExtensions = new[] { "jpg", "jpeg", "png", "webp" };
+        var disposition = imageExtensions.Contains(fileObject.Extension) ? "inline" : "attachment";
+
+        response.Headers["ETag"] = etag;
+        response.Headers["Accept-Ranges"] = "bytes";
+        response.Headers["Content-Disposition"] = $"{disposition}; filename=\"{asciiFallback}\"; filename*=UTF-8''{encodedName}";
+        response.Headers["Content-Type"] = fileObject.ContentType;
+        response.Headers["X-Accel-Redirect"] = $"/protected-download/{fileObject.RelativePath}";
+
+        await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId, clientIp, userAgent);
+
+        return Results.StatusCode(200);
     }
 
     private static async Task WriteConsumeDenialAuditAsync(

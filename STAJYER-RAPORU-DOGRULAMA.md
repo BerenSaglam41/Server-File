@@ -27,6 +27,28 @@
 
 **Neden hatalı:** Gösterilen başlıklar ("Private Download Akışı", "Ticket Tüketimi ve Internal Redirect", "Fiziksel Erişim Sınırı") dosyada **hiç yok**. `X-Accel-Redirect` kelimesi projenin hiçbir dosyasında (`.md`, `.cs`, `.conf`) geçmiyor. Gerçek dosya, byte'ın File-Service'ten geçmesini **bilinçli V1 kararı** olarak tanımlıyor, tam tersini değil.
 
+**GÜNCELLEME (2026-07-02) — Madde 1 (ticket bazlı indirmeler için) uygulandı, ama uydurma kaynağa dayanarak değil, kullanıcının kendi kararıyla:**
+
+Kaynak alıntısı hâlâ hatalı (yukarıdaki tespit değişmedi), ama kullanıcı X-Accel-Redirect konseptinin
+kendi başına mantıklı olduğuna karar verip uygulanmasını istedi. Tasarım netleştirilip onaylandı: Gateway'e
+yeni bir NFS bağlantısı açılmadı (mevcut host `ro` mount'u bind-mount edildi), FileServiceApi'nin
+ticket-consume endpoint'ine dar kapsamlı bir mTLS-only istisna eklendi (sadece CN=gateway, sadece bu
+endpoint, diğer tüm `/internal/*` hâlâ mTLS+JWT istiyor).
+
+- `POST /files/download/{ticket}` yerine hâlâ `POST .../download-ticket` ile ticket alınıyor, ama
+  `downloadUrl` artık Gateway'in yeni `/files/download/{ticket}` yoluna işaret ediyor.
+- FileServiceApi ticket-consume'da artık `X-Accel-Redirect` header'ı dönüyor, byte'ı kendisi okumuyor.
+- Uçtan uca test edildi: içerik birebir aynı, tek-kullanım korunuyor, Range çalışıyor, `/protected-download/`
+  dışarıdan erişilemiyor, yanlış CN'ler (TLS seviyesinde ve uygulama seviyesinde) reddediliyor, diğer
+  `/internal/*` endpoint'ler hâlâ JWT istiyor (doğrulandı).
+- Tam kanıt: `proof/x-accel-redirect-gateway.md`. Karar gerekçesi: `PROJECT_STATUS.md` → "X-Accel-Redirect
+  ile Byte Delivery Gateway'e Taşındı" bölümü.
+
+**Hâlâ yapılmayan kısım:** Ticket dışı, normal (`/api/personnel/{id}/cv/content` gibi) indirme
+endpoint'leri hâlâ eski V1 backend proxy akışını kullanıyor — bu zaten `file-service-api-contract.md`'nin
+kendi ayrımına göre beklenen (X-Accel/ticket modeli sadece "performans baskısı" senaryoları için V2
+opsiyonu).
+
 ---
 
 ## Madde 2 — Opaque Ticket + Lease Modeli

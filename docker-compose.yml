@@ -61,6 +61,7 @@ services:
       Mtls__CaCertPath:     "/certs/ca.crt"
       Mtls__AllowedClientCNs__0: "yonetimapi"
       Mtls__AllowedClientCNs__1: "filoapi"
+      Mtls__AllowedClientCNs__2: "gateway"
       FilesPublisher__BaseUrl:       "${FILES_PUBLISHER_URL:-https://192.168.64.3:6060}"
       FilesPublisher__ClientCertPath: "/certs/fileservice-client.crt"
       FilesPublisher__ClientKeyPath:  "/certs/fileservice-client.key"
@@ -190,10 +191,18 @@ services:
     volumes:
       - ./certs/gateway.crt:/etc/nginx/certs/gateway.crt:ro
       - ./certs/gateway.key:/etc/nginx/certs/gateway.key:ro
+      - ./certs/gateway-client.crt:/etc/nginx/certs/gateway-client.crt:ro
+      - ./certs/gateway-client.key:/etc/nginx/certs/gateway-client.key:ro
+      - ./certs/ca.crt:/etc/nginx/certs/ca.crt:ro
+      # X-Accel-Redirect için: host'ta zaten NFS ile mount edilmiş, salt-okunur
+      # export dizininin aynısı — Gateway'e AYRI bir NFS bağlantısı açılmıyor,
+      # api-server'ın mevcut (ro) mount'u container'a bind-mount ediliyor.
+      - ${STORAGE_PATH:-/Volumes/platform-files}/export:/protected-files:ro
     depends_on:
       - yonetimapi
       - flotaapi
       - opsapi
+      - fileservice
       - client
     networks:
       - platform-net
