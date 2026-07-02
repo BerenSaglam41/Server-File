@@ -178,3 +178,19 @@ Her madde ya kod okunarak ya da bu oturumda sunucuda gerçek bir istek/komutla k
 - `file-service-api-contract.md`: `X-Actor-Display` header'ından bahsediyor ("opsiyonel, secretsiz audit gösterimi"); kodda hiçbir yerde kullanılmıyor — sadece `X-Actor-User-Id` ve `X-Correlation-Id` var. Doküman bunu zaten "opsiyonel" dediği için bu bir eksik değil, sadece hiç kullanılmamış bir seçenek.
 
 *Bu envanterin karşılığı olan diğer eksik/olmayan şeyler (`-` işaretliler) için: NFS read-only değil, container restart policy yok, `filo.vehicles` tablosu yok, secret rotasyonu yok, client router'ı yok — bunlar önceki oturumlarda ayrıca kayıt altına alınmıştı.*
+
+---
+
+## Güvenlik Taraması — Yeni Bulunan 6 Sorun (Henüz Düzeltilmedi, Kayıt Amaçlı)
+
+Bu oturumda ek bir güvenlik taraması yapıldı: bağımlılık açıkları, container ayrıcalıkları, brute-force koruması, NFS mount seçenekleri, healthcheck kapsamı, log rotasyonu, SQL injection.
+
+- ❌ **`Microsoft.OpenApi 2.0.0` paketinde bilinen YÜKSEK önem dereceli güvenlik açığı** (`GHSA-v5pm-xwqc-g5wc`) — hem `YonetimApi` hem `FlotaApi`'de. **Kanıt:** `dotnet list package --vulnerable --include-transitive` ile doğrudan tarandı.
+- ❌ **6 container da (YonetimApi, FlotaApi, FileServiceApi, OpsApi, client, gateway) root olarak çalışıyor** — hiçbir Dockerfile'da `USER` direktifi yok. **Kanıt:** tüm Dockerfile'lar tek tek okundu.
+- ❌ **Keycloak brute-force koruması tanımlı değil** — `realm-platform.json`'da `bruteForce` ayarı hiç yok, yanlış şifre denemelerine karşı kilitleme/gecikme mekanizması çalışmıyor.
+- ❌ **NFS mount'ta `nosuid`/`nodev`/`noexec` seçenekleri yok** — zaten `rw` olan mount'a (bkz. yukarıdaki NFS read-only bulgusu) ek bir savunma katmanı da eksik. **Kanıt:** `mount` çıktısı sunucuda doğrudan okundu.
+- ❌ **8 servisin sadece 2'sinde (postgres, keycloak) Docker healthcheck tanımlı** — YonetimApi/FlotaApi/FileServiceApi/OpsApi/client/gateway'in "process ayakta ama uygulama donmuş" durumunu Docker seviyesinde tespit eden hiçbir mekanizma yok.
+- ❌ **Docker log rotasyonu hiç ayarlanmamış** (`logging:`/`max-size`/`max-file` yok) — container logları teorik olarak sınırsız büyüyüp disk doluluğuna katkıda bulunabilir (bu oturumda zaten bir disk doluluğu sorunu yaşandı, farklı bir sebepten).
+- 🔶 (küçük, düşük öncelik) nginx CSP'de `style-src` için `'unsafe-inline'` kullanılıyor — CSP'yi hafifçe zayıflatıyor.
+
+**Olumlu kontrol sonucu:** SQL injection taraması **temiz** — tüm veritabanı sorguları (YonetimApi, FlotaApi, FileServiceApi) parametreli (`$1,$2...` + `Parameters.AddWithValue`), dinamik SQL seçimi bile (personel arama endpoint'i) sabit literal string'ler arasından yapılıyor, kullanıcı girdisi hiçbir zaman sorgu metnine karışmıyor.
