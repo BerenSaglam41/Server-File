@@ -122,6 +122,8 @@ Her madde ya kod okunarak ya da bu oturumda sunucuda gerçek bir istek/komutla k
 ✅ Upload/DB tutarsızlığında rollback (DB kaydı başarısız olursa export'tan dosya silinir)
 ✅ `files.audit_events`'e her create/read/archive/denied yazılıyor — **doğrudan SQL ile sorgulanıp gerçek kayıtlar görüldü**
 ✅ `/health` endpoint'i — `.probe` dosyası + gerçek `SELECT 1` DB sorgusu
+✅ **API cevaplarında `relative_path`/host/mount bilgisi hiç dönmüyor** — kod tarandı, `Results.Ok(new {...})` çağrılarının hiçbirinde `RelativePath` alanı yok (sadece `fileId/domain/relationType/contentType/extension/sizeBytes/classification/status/etag`); `file-catalog-model.md`'nin "API response Files-01 hostname, mount path veya relative path dönmez" isteği bire bir karşılanmış
+✅ **Fiziksel path'te uygulama adı hiç geçmiyor** — path `{domain}/...` (personnel/fleet) ile başlıyor, `yonetimapi`/`filoapi` gibi bir uygulama ismi asla path'e yazılmıyor (`file-catalog-model.md`'nin "app isolation" kuralına uygun)
 
 ## 10. Ops Console / OpsApi
 
@@ -146,7 +148,7 @@ Her madde ya kod okunarak ya da bu oturumda sunucuda gerçek bir istek/komutla k
 
 ✅ Günlük backup systemd timer'ı
 ✅ Haftalık restore-test timer'ı — **canlı tetiklendi**, gerçek `sha256sum -c` çalıştı, **her dosya için "OK"** çıktısı bizzat görüldü
-✅ Saatlik disk doluluk kontrolü (`disk-check.sh`)
+✅ Saatlik disk doluluk kontrolü (`disk-check.sh`) — gerçek eşikler `WARN_PCT=80`, `CRIT_PCT=90` (koddan doğrulandı)
 ✅ `tools/install-backup-timers.sh` — 4 timer'ı (backup/restore-test/disk-check/services-status) tek seferde kuruyor
 ✅ `tools/configure-files01-nfs.sh` — files01 NFS export'unu production moduna göre yapılandırıyor
 
@@ -169,4 +171,10 @@ Her madde ya kod okunarak ya da bu oturumda sunucuda gerçek bir istek/komutla k
 
 ---
 
-*Bu envanterin karşılığı olan eksik/olmayan şeyler (`-` işaretliler) için: NFS read-only değil, container restart policy yok, `filo.vehicles` tablosu yok, secret rotasyonu yok, client router'ı yok — bunlar önceki oturumlarda ayrıca kayıt altına alınmıştı.*
+## Bu Turda Bulunan, Küçük Ama Gerçek Plan-Gerçek Farkları
+
+- `files01-nfs-model.md`: "kapasite alarm eşikleri ilk hedef %70/%85/%95 (3 kademe)" diyor; gerçek kodda (`disk-check.sh`) sadece **2 kademe** var: `WARN_PCT=80`, `CRIT_PCT=90`.
+- `files01-nfs-model.md`: "Files-01 diski 300 GB başlangıç kapasitesiyle izlenir" diyor; files01'in gerçek diski **9.8 GB** (`df -h` ile doğrudan doğrulandı) — bu bir test/demo VM'i olduğu için beklenen bir fark, ama plan metniyle birebir örtüşmüyor.
+- `file-service-api-contract.md`: `X-Actor-Display` header'ından bahsediyor ("opsiyonel, secretsiz audit gösterimi"); kodda hiçbir yerde kullanılmıyor — sadece `X-Actor-User-Id` ve `X-Correlation-Id` var. Doküman bunu zaten "opsiyonel" dediği için bu bir eksik değil, sadece hiç kullanılmamış bir seçenek.
+
+*Bu envanterin karşılığı olan diğer eksik/olmayan şeyler (`-` işaretliler) için: NFS read-only değil, container restart policy yok, `filo.vehicles` tablosu yok, secret rotasyonu yok, client router'ı yok — bunlar önceki oturumlarda ayrıca kayıt altına alınmıştı.*
