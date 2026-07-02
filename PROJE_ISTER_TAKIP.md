@@ -39,6 +39,16 @@ Bu liste artık tahmin/kod-okuması değil — her ✅ ve ❌, bu oturumda **sun
 - ✅ **Audit kaydı test edildi:** `files.audit_events` tablosu doğrudan sorgulandı, tam da yaptığımız testlerle eşleşen `create/read/archive/denied` satırları gerçekten orada.
 - 🔶 **TEST EDİLEMEDİ:** "app policy izin vermeyince 403" (uygulamalar-arası, örn. YonetimApi'nin fleet dosyasına erişmeye çalışması). **Neden:** `domain` değeri (personnel/fleet) YonetimApi ve FlotaApi'nin kendi kodunda sabit yazılı, dışarıdan/kullanıcıdan hiçbir şekilde değiştirilemiyor — yani gerçek istemci arayüzünden bu senaryo hiç tetiklenemiyor. Bu, "test edilmedi" değil, "mimari olarak dışarıdan denenemez" demek (olumlu bir kısıtlama).
 
+### Bu dosyanın "Yetki Sınırları" ve "Auth Modeli" tabloları — ayrı ayrı ele alınmadı, ekliyorum
+
+Bu dosyanın kendi tablosunda 4 katman tanımlı: Keycloak, Uygulama API, File-Service API, Files-01. Ve "Auth Modeli" tablosunda 3 servis-içi auth seçeneği listeleniyor: OAuth2 client credentials, mTLS, network allowlist. Bunları ayrı satırlar olarak kontrol ediyorum:
+
+- ✅ **Keycloak "kullanıcı kimliği ve token üretimi" görevini görüyor.** **Test:** her giriş (hr001, p001, m001, fleetuser, opsadmin) gerçekten Keycloak üzerinden doğrulandı, token üretildi.
+- ✅ **Gateway-01 (dokümanın tüm akış diyagramlarında geçen tek giriş noktası) gerçekten var ve çalışıyor.** **Test:** tüm testler `https://192.168.64.5:5090` üzerinden yapıldı; `/internal/` doğrudan denenince `404`; ufw ile sadece bu port dışa açık olduğu ayrıca doğrulandı.
+- ✅ **OAuth2 client credentials** (dokümanın "varsayılan" dediği seçenek) — YonetimApi/FlotaApi'nin FileService'e giden servis token'ı tam olarak bu, canlı çalışıyor.
+- ✅ **mTLS** (dokümanın "ileride servis kimliğini güçlendirmek için" dediği, yani V1'de opsiyonel bıraktığı seçenek) — **gerçekte planın istediğinden daha ileri gidilmiş, V1'de zaten zorunlu hale getirilmiş.** Sertifika zinciri (`platform-ca` → `fileservice`/`yonetimapi`/`filoapi`) kontrol edildi; FlotaApi'de bu oturumda eksik çıkan `KeycloakBackchannelHandler` bulunup düzeltildi, sonrasında canlı çalıştığı doğrulandı.
+- ✅ **Internal network allowlist** (dokümanın "tek başına yeterli değil, ek katman" dediği) — `ufw` + Docker `ports:` kısıtlaması olarak gerçekten var, tek başına değil mTLS+JWT ile birlikte kullanılıyor (dokümanın istediği tam da bu).
+
 ---
 
 ## 4) `file-service-intern-brief.md`
@@ -63,11 +73,19 @@ Bu liste artık tahmin/kod-okuması değil — her ✅ ve ❌, bu oturumda **sun
 
 ---
 
-## Bu Oturumda Bulunan Yeni Sorun (Testle Ortaya Çıktı)
+## Düzeltme: "Arşivlenen Dosya Erişilebilir Kalıyor" Yanlış Çıkarımdı
 
-**Arşivlenen dosya bazı durumlarda hâlâ erişilebilir kalabiliyor.**
+İlk testte yanlış sonuca vardım, DB'ye bakınca gerçek sebep netleşti — **bu bir hata değil.**
 
-`document`, `attachment`, `report` dosya tipleri veritabanında "multi-primary" olarak tanımlı (aynı anda birden fazla aktif dosya olabilir). Ama FlotaApi'nin `content`/`archive` uçları belirli bir `fileId` almıyor, sadece "bu ilişkinin aktif olanını getir" diyor. Test ettim: `test_arac_1` için bir `document` yükleyip arşivledim, sonra tekrar `.../document/content` istedim — **hâlâ `200 OK` ile bir dosya döndü** (muhtemelen daha önceden var olan başka bir aktif `document` kaydı). Yani multi-primary bir tipte "arşivle" dediğinizde, o tipin **tamamen** erişilemez hale geldiğinden emin olamıyorsunuz — hangi kaydın döneceği belirsiz.
+**Gerçek durum (DB'den doğrudan kontrol edildi):** `test_arac_1` için **iki ayrı** `document` kaydı varmış: biri bu oturumun daha önceki bir testinden kalma (05:45), biri de benim yeni yüklediğim (06:16). Ben "arşivle" dediğimde sistem **eski kaydı doğru şekilde arşivledi** (`status=archived`, `reference=revoked`). Sonra tekrar dosya istediğimde dönen şey, arşivlediğim dosya **değil**, hâlâ meşru şekilde aktif olan **diğer** kayıttı.
+
+Bunu iki ayrı testle kesinleştirdim:
+- Arşivlenen dosyanın kendi `fileId`'siyle doğrudan istek attım → **`404`** (koddaki `if (fileObject.Status != "active") return NotFound()` kontrolü tam çalışıyor)
+- Dosya listesini çektim → arşivlenen kayıt listede **hiç görünmüyor**, sadece hâlâ aktif olan tek kayıt var
+
+**Ayrıca senin sorduğun "arşivlenen dosya başka bir klasöre taşınıp erişime kapatılmalı değil mi" sorusu için doğrudan spesifikasyona baktım.** `file-service-api-contract.md` şunu diyor: *"Hard delete ilk fazda yoktur. Dosya önce archived veya revoked duruma alınır; fiziksel temizlik retention politikasına bağlanır."* Yani plan da zaten **V1'de dosyanın fiziksel olarak taşınmasını/silinmesini istemiyor** — sadece durum bayrağının değişmesini istiyor, fiziksel temizliği bilinçli olarak "retention policy" adıyla **V2'ye erteliyor**. Şu anki davranış (durum değişir, dosya `export/`'ta fiziksel olarak kalır ama artık hiçbir API'den erişilemez) **planın V1 için istediğiyle birebir uyuşuyor.**
+
+Tek gerçek eksik nokta: `document`/`attachment`/`report` gibi çoklu-aktif tiplerde FlotaApi'nin `archive` çağrısı **hangi kaydı** arşivleyeceğinizi seçtirmiyor (fileId almıyor, sadece "birini" buluyor) — bu bir güvenlik açığı değil ama kullanıcı deneyimi açısından kafa karıştırıcı olabilir: "dokümanı arşivledim" dediğinizde hangi dokümanın arşivlendiği belirsiz kalabilir.
 
 ---
 
