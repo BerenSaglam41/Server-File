@@ -21,7 +21,8 @@
       "Bash(awk '{print $2}')",
       "Bash(pkill -f \"YonetimApi\")",
       "Bash(PGPASSWORD=\"\" psql *)",
-      "Bash(sshpass *)"
+      "Bash(sshpass *)",
+      "Bash(ssh *)"
     ]
   }
 }
