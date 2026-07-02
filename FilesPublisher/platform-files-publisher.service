@@ -1,0 +1,35 @@
+[Unit]
+Description=Platform Files Publisher - Files-01 uzerinde calisan mTLS korumali yazma servisi
+After=network.target
+
+[Service]
+Type=simple
+User=files-writer
+Group=files-publishers
+Environment=STAGING_ROOT=/srv/files/staging
+Environment=EXPORT_ROOT=/srv/files/export
+Environment=LISTEN_HOST=0.0.0.0
+Environment=LISTEN_PORT=6060
+Environment=SERVER_CERT=/etc/platform-certs/filespublisher.crt
+Environment=SERVER_KEY=/etc/platform-certs/filespublisher.key
+Environment=CA_CERT=/etc/platform-certs/ca.crt
+Environment=ALLOWED_CLIENT_CNS=fileservice
+ExecStart=/usr/bin/python3 /opt/platform-files-publisher/publisher.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=platform-files-publisher
+
+# Hardening: sadece kendi calisma alanina yazabilsin.
+# ONEMLI: staging ve export AYRI ReadWritePaths girdileri olarak verilirse
+# systemd bunlari ayri bind-mount'lar olarak sandbox'lar (ayni fiziksel FS
+# olsalar bile) ve os.rename() "Invalid cross-device link" (EXDEV) hatasi
+# verir. Ortak ust dizin (/srv/files) TEK girdi olarak verilmeli.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/files
+
+[Install]
+WantedBy=multi-user.target

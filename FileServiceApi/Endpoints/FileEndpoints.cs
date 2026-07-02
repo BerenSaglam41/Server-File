@@ -265,7 +265,8 @@ public static class FileEndpoints
         AppDbContext db,
         AuditService audit,
         IConfiguration config,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IFilesPublisherClient publisher)
     {
         var logger = loggerFactory.CreateLogger("FileServiceApi.FileUpload");
         var appCode = ExtractAppCode(request.HttpContext.User);
@@ -376,50 +377,27 @@ public static class FileEndpoints
         var shard2 = fileIdString.Substring(2, 2);
         var relativePath = $"{domain}/{shard1}/{shard2}/{fileIdString}.{extension}";
 
-        var stagingPath = config["FileStorage:StagingPath"]!;
-        var exportPath  = config["FileStorage:ExportPath"]!;
-
-        var stagingFull = Path.Combine(stagingPath, relativePath);
-        var exportFull  = Path.Combine(exportPath,  relativePath);
-
+        // Staging/export yazımı artık FileServiceApi'nin kendi NFS mount'unda değil,
+        // Files-01 üzerinde çalışan FilesPublisher servisinde yapılır (mTLS ile).
+        // FileServiceApi bu adımdan sonra sadece OKUMA için NFS mount'una ihtiyaç duyar.
         string sha256Hash;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(stagingFull)!);
-
-            // 1. Staging'e yaz
-            using (var stagingStream = new FileStream(stagingFull, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (var uploadStream = file.OpenReadStream())
-            {
-                await uploadStream.CopyToAsync(stagingStream);
-            }
-
-            // 2. Staging'deki dosyadan SHA256 hesapla (disk write bütünlüğü de doğrulanır)
-            using (var sha256 = System.Security.Cryptography.SHA256.Create())
-            using (var hashStream = new FileStream(stagingFull, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                var hashBytes = await sha256.ComputeHashAsync(hashStream);
-                sha256Hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-            }
-
-            // 3. Atomic promote: staging → export (aynı FS → rename)
-            Directory.CreateDirectory(Path.GetDirectoryName(exportFull)!);
-            File.Move(stagingFull, exportFull, overwrite: false);
+            using var uploadStream = file.OpenReadStream();
+            (sha256Hash, _) = await publisher.PublishAsync(relativePath, uploadStream, file.Length);
         }
-        catch (IOException ex)
+        catch (FilesPublisherException ex)
         {
-            if (File.Exists(stagingFull)) File.Delete(stagingFull);
             logger.LogError(ex,
-                "Storage write failed during file create. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
+                "FilesPublisher yazma reddetti. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
                 appCode, domain, entityType, entityId, relationType, relativePath, correlationId);
             await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+        catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
         {
-            if (File.Exists(stagingFull)) File.Delete(stagingFull);
             logger.LogError(ex,
-                "Storage path failed during file create. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
+                "FilesPublisher'a ulaşılamadı. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
                 appCode, domain, entityType, entityId, relationType, relativePath, correlationId);
             await audit.WriteAsync(null, appCode, actor, "create", "error", "storage_write_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "storage_unavailable" }, statusCode: 503);
@@ -444,7 +422,7 @@ public static class FileEndpoints
 
         if (existingDuplicateId.HasValue)
         {
-            try { File.Delete(exportFull); } catch { /* best effort */ }
+            await publisher.DeleteAsync(relativePath);
             await audit.WriteAsync(null, appCode, actor, "create", "denied", "duplicate_file", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "duplicate_file", existingFileId = existingDuplicateId.Value }, statusCode: 409);
         }
@@ -489,7 +467,7 @@ public static class FileEndpoints
         catch
         {
             // Rollback: export'tan da sil; katalog tutarsız kalmasın
-            if (File.Exists(exportFull)) File.Delete(exportFull);
+            await publisher.DeleteAsync(relativePath);
             await audit.WriteAsync(null, appCode, actor, "create", "error", "db_insert_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "internal_error" }, statusCode: 500);
         }

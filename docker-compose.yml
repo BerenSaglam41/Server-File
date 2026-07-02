@@ -50,9 +50,9 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
+      # StagingPath/ExportPath artık kullanılmıyor — yazma FilesPublisher'a taşındı,
+      # FileServiceApi bu mount'u sadece OKUMA için kullanıyor.
       FileStorage__ReadPath:    "/app/storage/export"
-      FileStorage__StagingPath: "/app/storage/staging"
-      FileStorage__ExportPath:  "/app/storage/export"
       Keycloak__Authority: "http://localhost:8080/realms/platform"
       Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
       Keycloak__RequireHttpsMetadata: "false"
@@ -61,11 +61,19 @@ services:
       Mtls__CaCertPath:     "/certs/ca.crt"
       Mtls__AllowedClientCNs__0: "yonetimapi"
       Mtls__AllowedClientCNs__1: "filoapi"
+      FilesPublisher__BaseUrl:       "${FILES_PUBLISHER_URL:-https://192.168.64.3:6060}"
+      FilesPublisher__ClientCertPath: "/certs/fileservice-client.crt"
+      FilesPublisher__ClientKeyPath:  "/certs/fileservice-client.key"
+      FilesPublisher__CaCertPath:     "/certs/ca.crt"
     volumes:
-      - ${STORAGE_PATH:-/Volumes/platform-files}:/app/storage
+      # :ro — FileServiceApi artık dosya yazmıyor (upload FilesPublisher'a taşındı),
+      # bu mount sadece stream/read için kullanılıyor. Container seviyesinde salt-okunur.
+      - ${STORAGE_PATH:-/Volumes/platform-files}:/app/storage:ro
       - ./certs/fileservice.crt:/certs/fileservice.crt:ro
       - ./certs/fileservice.key:/certs/fileservice.key:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
+      - ./certs/fileservice-client.crt:/certs/fileservice-client.crt:ro
+      - ./certs/fileservice-client.key:/certs/fileservice-client.key:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -20,6 +20,8 @@ CERT_DAYS="${CERT_DAYS:-825}"
 FILESERVICE_DNS="${FILESERVICE_DNS:-fileservice,localhost}"
 GATEWAY_DNS="${GATEWAY_DNS:-gateway,localhost}"
 GATEWAY_IPS="${GATEWAY_IPS:-127.0.0.1,192.168.64.5}"
+FILESPUBLISHER_DNS="${FILESPUBLISHER_DNS:-filespublisher,files01,localhost}"
+FILESPUBLISHER_IPS="${FILESPUBLISHER_IPS:-127.0.0.1,192.168.64.3}"
 
 should_create() {
   local crt="$1"
@@ -133,17 +135,24 @@ EOF
   echo "  → $name.crt + $name.key"
 }
 
-sign_server "fileservice" "/CN=fileservice/O=Platform/OU=Internal" "$FILESERVICE_DNS"
-sign_server "gateway"     "/CN=gateway/O=Platform/OU=Internal" "$GATEWAY_DNS" "$GATEWAY_IPS"
-sign_client "yonetimapi"  "/CN=yonetimapi/O=Platform/OU=Internal"
-sign_client "filoapi"     "/CN=filoapi/O=Platform/OU=Internal"
+sign_server "fileservice"     "/CN=fileservice/O=Platform/OU=Internal" "$FILESERVICE_DNS"
+sign_server "gateway"         "/CN=gateway/O=Platform/OU=Internal" "$GATEWAY_DNS" "$GATEWAY_IPS"
+sign_server "filespublisher"  "/CN=filespublisher/O=Platform/OU=Internal" "$FILESPUBLISHER_DNS" "$FILESPUBLISHER_IPS"
+sign_client "yonetimapi"       "/CN=yonetimapi/O=Platform/OU=Internal"
+sign_client "filoapi"          "/CN=filoapi/O=Platform/OU=Internal"
+# FileServiceApi'nin FilesPublisher'ı mTLS ile çağırabilmesi için ayrı bir client sertifikası.
+# CN=fileservice (fileservice.crt ile aynı kimlik) ama clientAuth EKU'lu — fileservice.crt
+# serverAuth için üretildiği için client tarafında yeniden kullanılamaz.
+sign_client "fileservice-client" "/CN=fileservice/O=Platform/OU=Internal"
 
 echo ""
 echo "=== Doğrulama ==="
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/fileservice.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/gateway.crt"
+openssl verify -CAfile "$DIR/ca.crt" "$DIR/filespublisher.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/yonetimapi.crt"
 openssl verify -CAfile "$DIR/ca.crt" "$DIR/filoapi.crt"
+openssl verify -CAfile "$DIR/ca.crt" "$DIR/fileservice-client.crt"
 
 echo ""
 echo "Oluşturulan / korunan dosyalar:"

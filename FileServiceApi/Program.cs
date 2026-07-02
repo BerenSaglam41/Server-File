@@ -49,6 +49,42 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddScoped<AuditService>();
 
+// ── mTLS: FilesPublisher HttpClient — Files-01 üzerindeki yazma servisine
+// client sertifikasıyla bağlanır. FileServiceApi'nin NFS mount'unu salt-okunur
+// yapabilmesi için tek canlı yazma ihtiyacı (upload) bu servise taşındı.
+var publisherClientCertPath = builder.Configuration["FilesPublisher:ClientCertPath"];
+var publisherClientKeyPath  = builder.Configuration["FilesPublisher:ClientKeyPath"];
+var publisherCaCertPath     = builder.Configuration["FilesPublisher:CaCertPath"];
+bool publisherMtlsEnabled   = !string.IsNullOrEmpty(publisherClientCertPath);
+
+builder.Services.AddHttpClient("FilesPublisher", client =>
+{
+    var baseUrl = builder.Configuration["FilesPublisher:BaseUrl"] ?? "https://localhost:6060";
+    client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+}).ConfigurePrimaryHttpMessageHandler(() =>
+{
+    if (!publisherMtlsEnabled)
+        return new HttpClientHandler();
+
+    var raw  = X509Certificate2.CreateFromPemFile(publisherClientCertPath!, publisherClientKeyPath!);
+    var cert = new X509Certificate2(raw.Export(X509ContentType.Pkcs12));
+
+    var ca = new X509Certificate2(publisherCaCertPath!);
+    var handler = new HttpClientHandler();
+    handler.ClientCertificates.Add(cert);
+    handler.ServerCertificateCustomValidationCallback = (_, serverCert, chain, _) =>
+    {
+        if (serverCert == null || chain == null) return false;
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(ca);
+        return chain.Build(serverCert);
+    };
+    return handler;
+});
+builder.Services.AddScoped<IFilesPublisherClient, FilesPublisherClient>();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
