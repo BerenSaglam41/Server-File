@@ -167,10 +167,20 @@ from yonetim.download_tickets;
      11 |          9 |                            2
 ```
 
-**Doğrulanan gerçek:** Süresi dolmuş ticket satırları **otomatik temizlenmiyor** — bilinen, dokümante
-edilmiş bir V1 sınırlaması. Satırlar küçük (~200 byte) ve hacim düşük olduğu için şu an operasyonel bir
-risk değil, ama uzun vadede bir cleanup job (`DELETE WHERE expires_at < now() - interval '1 day'`)
-eklenmeli.
+**Doğrulanan gerçek (test anında):** Süresi dolmuş ticket satırları **otomatik temizlenmiyordu**.
+
+**Sonradan eklendi ve test edildi (2026-07-02):** `tools/cleanup-download-tickets.sh` +
+`platform-download-ticket-cleanup.service`/`.timer` (günlük `04:00:00 UTC`, `Persistent=true`, diğer 4
+platform timer'ıyla aynı desende). Sunucuda canlı test edildi:
+
+```
+$ RETAIN_DAYS=0 bash tools/cleanup-download-tickets.sh
+[OK] 12 satir silindi (expires_at < now() - 0 gun)
+```
+Tablo `select count(*) from yonetim.download_tickets;` ile `0`'a düştüğü doğrulandı. Ayrıca
+`systemctl start platform-download-ticket-cleanup.service` ile systemd üzerinden de tetiklenip
+`journalctl -u platform-download-ticket-cleanup` çıktısı temiz şekilde göründü. `systemctl list-timers
+'platform-*'` diğer 4 timer'ın (backup/restore-test/disk-check/services-status) etkilenmediğini gösterdi.
 
 ## Test M — Ticket Alındıktan Sonra Dosya Arşivlenirse
 

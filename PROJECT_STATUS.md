@@ -1989,14 +1989,29 @@ server `git rev-parse HEAD` birebir eşleşti) — kod hem yerelde derlendi hem 
 
 Test detayları ve kanıtları (15 senaryonun tamamı, ham komut/çıktılarla): `proof/download-ticket-sistemi.md`.
 
+### Ticket Cleanup Job'ı (EKLENDİ ✅ — 2026-07-02)
+
+Test L'nin bulduğu "süresi dolmuş ticket'lar birikir" sınırlaması, kritik olmasa da giderildi:
+
+- `tools/cleanup-download-tickets.sh` — `DELETE FROM yonetim.download_tickets WHERE expires_at < now() -
+  interval '1 day'` çalıştırır (`RETAIN_DAYS` ile parametrelenir), psql'in `DELETE n` komut etiketinden
+  silinen satır sayısını okuyup loglar.
+- `tools/install-backup-timers.sh`'e `platform-download-ticket-cleanup.service` + `.timer` eklendi
+  (diğer 4 timer'la aynı desende: `Type=oneshot`, `Persistent=true`, günlük `04:00:00 UTC`).
+- Sunucuda **diğer 4 timer'a dokunmadan** sadece bu ikisi manuel kuruldu (`systemctl enable --now`),
+  `RETAIN_DAYS=0` ile gerçek bir silme senaryosu test edildi (12 satır silindi, tablo 0'a düştü), sonra
+  systemd üzerinden `systemctl start platform-download-ticket-cleanup.service` ile de çalıştırılıp
+  `journalctl` çıktısı doğrulandı. `systemctl list-timers 'platform-*'` → 5 timer, hepsi aktif.
+
 ### Bilinen sınırlamalar (V1, bilerek — test edilip doğrulandı)
 
 - Sadece personel (`YonetimApi`) tarafında var; FlotaApi'ye henüz taşınmadı.
-- Süresi dolmuş/tüketilmiş ticket satırları DB'de birikir — otomatik temizlik (cron/job) yok (Test L ile
-  doğrulandı), düşük hacimde şu an sorun değil ama uzun vadede bir temizlik görevi eklenmeli.
 - Çoklu Range isteği (video/büyük dosya seeking) desteklenmiyor — tek ticket = tek HTTP isteği (Test K ile
   doğrulandı). Gerekirse V2'de "lease" modeli değerlendirilir.
-- Logout, açık ticket'ları iptal etmiyor (Test N ile doğrulandı) — ömür kısa olduğu için bilinçli kabul.
+- Logout, açık ticket'ları iptal etmiyor (Test N ile doğrulandı) — ömür kısa olduğu için bilinçli kabul,
+  dokümante edildi.
+- Archive sonrası ticket tüketilip 404 dönüyor (Test M) — kabul edilebilir; istenirse ileride önce
+  FileServiceApi'nin dosya durumunu kontrol edip sonra `used_at` set edilebilir, şart değil.
 - `relation_type` alanı ticket oluşturma sırasında bilinmediği için `"unknown"` olarak yazılıyor — fileId
   bazlı akışta işlevsel bir etkisi yok, sadece kozmetik.
 
@@ -2025,8 +2040,6 @@ Test detayları ve kanıtları (15 senaryonun tamamı, ham komut/çıktılarla):
   Bu modele geçilirse FileService runtime NFS'e yazmaz, staging/publish ayrı kontrollü sürece taşınır.
 - **V2 Download ticket'ının FlotaApi'ye taşınması**: personel tarafı (`YonetimApi`) TAMAMLANDI (bkz. yukarıdaki
   "Opak, Tek Kullanımlık İndirme Ticket'ı" bölümü); aynı desen FlotaApi/araç dosyaları için henüz eklenmedi.
-- **Ticket cleanup job'ı**: süresi dolmuş `yonetim.download_tickets` satırları otomatik silinmiyor (Test L,
-  bkz. `proof/download-ticket-sistemi.md`) — düşük hacimde risksiz ama uzun vadede eklenmeli.
 - **Ticket lease modeli**: şu an tek ticket = tek HTTP isteği (Range dahil). Büyük dosya/video için çoklu
   Range gerekirse süreli "lease" modeli değerlendirilebilir (Test K).
 - **Sertifika rotasyonu**: `certs/generate-certs.sh` artık mevcut CA/sertifikaları varsayılan olarak ezmez; `FORCE_REGENERATE_CERTS=1` bilinçli rotasyon içindir. Gateway SAN değerleri `GATEWAY_DNS`/`GATEWAY_IPS` ile parametrelenir. Prod'da CA rotasyonu ayrı prosedürle yapılmalı.

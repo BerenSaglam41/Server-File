@@ -11,6 +11,8 @@
 #   BACKUP_RETAIN — how many daily backups to keep (default: 14)
 #   BACKUP_TIME   — backup timer calendar spec (default: *-*-* 02:00:00 UTC)
 #   RESTORE_TIME  — restore-test timer calendar spec (default: Sun *-*-* 03:00:00 UTC)
+#   TICKET_CLEANUP_TIME — download ticket cleanup calendar spec (default: *-*-* 04:00:00 UTC)
+#   TICKET_RETAIN_DAYS  — süresi dolmuş ticket'ların kaç gün tutulacağı (default: 1)
 #
 # After install, check status:
 #   systemctl list-timers 'platform-*'
@@ -25,6 +27,8 @@ BACKUP_TIME="${BACKUP_TIME:-*-*-* 02:00:00 UTC}"
 RESTORE_TIME="${RESTORE_TIME:-Sun *-*-* 03:00:00 UTC}"
 DISK_WARN_PCT="${DISK_WARN_PCT:-80}"
 DISK_CRIT_PCT="${DISK_CRIT_PCT:-90}"
+TICKET_CLEANUP_TIME="${TICKET_CLEANUP_TIME:-*-*-* 04:00:00 UTC}"
+TICKET_RETAIN_DAYS="${TICKET_RETAIN_DAYS:-1}"
 SYSTEMD_DIR="/etc/systemd/system"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -42,7 +46,7 @@ echo "  RESTORE_TIME : $RESTORE_TIME"
 echo ""
 
 # Gerekli scriptlerin varlığını doğrula
-for script in tools/backup-files01.sh tools/restore-test.sh tools/disk-check.sh tools/services-status.sh; do
+for script in tools/backup-files01.sh tools/restore-test.sh tools/disk-check.sh tools/services-status.sh tools/cleanup-download-tickets.sh; do
   if [ ! -x "$PROJECT_DIR/$script" ]; then
     echo "[HATA] Script bulunamadı veya çalıştırılabilir değil: $PROJECT_DIR/$script" >&2
     echo "chmod +x $PROJECT_DIR/$script" >&2
@@ -196,6 +200,42 @@ WantedBy=timers.target
 EOF
 echo "[OK] $SYSTEMD_DIR/platform-services-status.timer yazıldı"
 
+# --- platform-download-ticket-cleanup.service ---
+cat > "$SYSTEMD_DIR/platform-download-ticket-cleanup.service" <<EOF
+[Unit]
+Description=Platform - suresi dolmus indirme ticket'larinin temizligi
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=$PROJECT_DIR
+Environment=COMPOSE_FILE=$PROJECT_DIR/docker-compose.yml
+Environment=RETAIN_DAYS=$TICKET_RETAIN_DAYS
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=$PROJECT_DIR/tools/cleanup-download-tickets.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=platform-download-ticket-cleanup
+EOF
+echo "[OK] $SYSTEMD_DIR/platform-download-ticket-cleanup.service yazıldı"
+
+# --- platform-download-ticket-cleanup.timer (günlük) ---
+cat > "$SYSTEMD_DIR/platform-download-ticket-cleanup.timer" <<EOF
+[Unit]
+Description=Platform indirme ticket temizlik timer (günlük)
+
+[Timer]
+OnCalendar=$TICKET_CLEANUP_TIME
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+echo "[OK] $SYSTEMD_DIR/platform-download-ticket-cleanup.timer yazıldı"
+
 # Reload + enable + start
 systemctl daemon-reload
 
@@ -211,6 +251,9 @@ echo "[OK] platform-disk-check.timer aktif"
 systemctl enable --now platform-services-status.timer
 echo "[OK] platform-services-status.timer aktif"
 
+systemctl enable --now platform-download-ticket-cleanup.timer
+echo "[OK] platform-download-ticket-cleanup.timer aktif"
+
 echo ""
 echo "=== Kurulum tamamlandı ==="
 echo ""
@@ -221,6 +264,7 @@ echo "  journalctl -u platform-backup -f"
 echo "  journalctl -u platform-restore-test -f"
 echo "  journalctl -u platform-disk-check -f"
 echo "  journalctl -u platform-services-status -f"
+echo "  journalctl -u platform-download-ticket-cleanup -f"
 echo ""
 echo "Manuel test (şimdi çalıştır):"
 echo "  systemctl start platform-backup.service"
@@ -231,3 +275,5 @@ echo "  systemctl start platform-disk-check.service"
 echo "  journalctl -u platform-disk-check --no-pager -n 20"
 echo "  systemctl start platform-services-status.service"
 echo "  journalctl -u platform-services-status --no-pager -n 20"
+echo "  systemctl start platform-download-ticket-cleanup.service"
+echo "  journalctl -u platform-download-ticket-cleanup --no-pager -n 20"
