@@ -36,14 +36,28 @@ if docker compose -f "$COMPOSE_FILE" ps -a --format json > "$raw" 2>"$err"; then
       docker ps -a --filter "label=com.docker.compose.project=$project" --format '{{json .}}' > "$raw" 2>"$err" || true
     fi
   fi
-  python3 - "$raw" "$tmp" "$STAMP" <<'PY'
+  python3 - "$raw" "$tmp" "$STAMP" "$ROOT_DIR" <<'PY'
 import datetime as dt
 import json
 import subprocess
 import sys
 
-raw_path, out_path, stamp = sys.argv[1:4]
+raw_path, out_path, stamp, root_dir = sys.argv[1:5]
 text = open(raw_path, encoding="utf-8").read().strip()
+
+def git_text(args):
+    try:
+        proc = subprocess.run(["git", "-C", root_dir] + args, text=True, capture_output=True, timeout=5)
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+    except Exception:
+        return ""
+
+git_info = {
+    "commit": git_text(["rev-parse", "HEAD"]) or "unknown",
+    "commit_short": git_text(["rev-parse", "--short=8", "HEAD"]) or "unknown",
+    "branch": git_text(["rev-parse", "--abbrev-ref", "HEAD"]) or "unknown",
+    "dirty": bool(git_text(["status", "--porcelain"])),
+}
 
 if not text:
     services = []
@@ -126,6 +140,7 @@ payload = {
     "timestamp": stamp,
     "count": len(services),
     "services": services,
+    "git": git_info,
 }
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -135,12 +150,13 @@ PY
   echo "[OK] Services status yazıldı: $STATUS_FILE"
 else
   reason="$(cat "$err" 2>/dev/null || true)"
-  python3 - "$STATUS_FILE" "$STAMP" "$reason" <<'PY'
+  python3 - "$STATUS_FILE" "$STAMP" "$reason" "$ROOT_DIR" <<'PY'
 import json
 import os
+import subprocess
 import sys
 
-path, stamp, reason = sys.argv[1:4]
+path, stamp, reason, root_dir = sys.argv[1:5]
 previous = {}
 if os.path.exists(path):
     try:
@@ -153,6 +169,21 @@ previous_services = previous.get("services")
 if not isinstance(previous_services, list):
     previous_services = []
 
+def git_text(args):
+    try:
+        proc = subprocess.run(["git", "-C", root_dir] + args, text=True, capture_output=True, timeout=5)
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+    except Exception:
+        return ""
+
+# git bilgisi docker'dan bağımsız — docker compose ps başarısız olsa bile taze hesaplanır.
+git_info = {
+    "commit": git_text(["rev-parse", "HEAD"]) or "unknown",
+    "commit_short": git_text(["rev-parse", "--short=8", "HEAD"]) or "unknown",
+    "branch": git_text(["rev-parse", "--abbrev-ref", "HEAD"]) or "unknown",
+    "dirty": bool(git_text(["status", "--porcelain"])),
+}
+
 payload = {
     "status": "failed",
     "timestamp": stamp,
@@ -160,6 +191,7 @@ payload = {
     "previous_timestamp": previous.get("timestamp"),
     "count": len(previous_services),
     "services": previous_services,
+    "git": git_info,
 }
 with open(path, "w", encoding="utf-8") as f:
     json.dump(payload, f, ensure_ascii=False, indent=2)

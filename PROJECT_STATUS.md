@@ -2066,6 +2066,35 @@ Netleştirildi ve şu şekilde bölündü:
 
 ---
 
+## Ops Versiyon Bilgisi Artık Kendiliğinden Güncelleniyor (TAMAMLANDI ✅ — 2026-07-02)
+
+**Sorun:** `/ops/version`'daki `commit`/`version` bilgisi, OpsApi container'ının build anında (`docker
+compose up --build opsapi`) shell'den okunan `GIT_COMMIT`/`BUILD_VERSION` env değişkenlerinden geliyordu
+— yani sadece OpsApi bilinçli olarak yeniden build edilip bu değişkenler elle export edildiğinde güncelleniyordu.
+Bugünkü ticket işlerinde `yonetimapi`/`fileservice` rebuild edildi ama OpsApi'ye dokunulmadığı için ekran
+saatlerce eski commit'i (`cf61d15`) gösterdi. **Kullanıcı haklı olarak bunun her seferinde elle
+düzeltilecek bir şey değil, sistemin kendiliğinden güncellemesi gereken bir şey olduğunu belirtti.**
+
+**Çözüm:** Zaten var olan, host'ta 5 dakikada bir otomatik çalışan `platform-services-status.timer` /
+`tools/services-status.sh` mekanizması genişletildi:
+
+- `tools/services-status.sh` artık her çalıştığında (5 dakikada bir, hem başarılı hem başarısız docker
+  compose durumunda) `git -C <proje-dizini> rev-parse HEAD` vb. ile **taze** commit/branch/dirty bilgisini
+  hesaplayıp `.services-status.json`'a bir `git` alanı olarak yazıyor — bu, docker'dan tamamen bağımsız,
+  host'un gerçek git checkout'unu yansıtıyor.
+- `OpsApi/Endpoints/OpsEndpoints.cs → BuildVersion()` artık önce bu snapshot dosyasındaki `git` alanını
+  okuyor (`git_status_source: "services-status-snapshot"`); sadece dosya hiç yoksa (ör. ilk kurulum anı)
+  container'ın kendi build-time env değişkenlerine geri düşüyor (`git_status_source: "container-env-fallback"`).
+
+**Canlı kanıt:** OpsApi, `GIT_COMMIT`/`BUILD_VERSION` env değişkenleri **bilerek export edilmeden**
+(`unset GIT_COMMIT BUILD_VERSION GIT_BRANCH BUILD_TIME`) yeniden build edildi; `/ops/version` yine de
+doğru, güncel commit'i (`b9557f75`, `git_status_source: services-status-snapshot`) gösterdi — mekanizmanın
+gerçekten container rebuild'inden bağımsız çalıştığı kanıtlandı. Artık hiçbir deploy sonrası "OpsApi'yi de
+rebuild etmeyi unutma" adımına gerek yok; en geç 5 dakika içinde (timer'ın bir sonraki çalışmasında)
+kendiliğinden güncellenir. `tools/server-smoke-test.sh` ile regresyon kontrolü yapıldı, 23/23 `[OK]`.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret

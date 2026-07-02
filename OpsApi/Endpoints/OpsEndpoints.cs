@@ -329,23 +329,64 @@ public static class OpsEndpoints
     private static object BuildVersion()
     {
         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-        var commit = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown";
         var startedAt = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+
+        // Öncelik: tools/services-status.sh'ın 5 dakikada bir yazdığı canlı git bilgisi
+        // (platform-services-status.timer) — bu sayede her deploy sonrası manuel container
+        // rebuild/restart yapılmasa bile versiyon bilgisi kendiliğinden güncel kalır.
+        // Snapshot henüz yoksa (ör. ilk kurulum) container'ın kendi build-time env
+        // değişkenlerine geri düşülür.
+        var git = LoadGitInfo();
+        var commit = git?.Commit ?? Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown";
+        var commitShort = git?.CommitShort
+                           ?? (commit == "unknown" ? "unknown" : commit[..Math.Min(commit.Length, 8)]);
+        var branch = git?.Branch ?? Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "unknown";
+        var dirtySuffix = git?.Dirty == true ? "-dirty" : "";
+
         return new
         {
             service     = "OpsApi",
-            version     = Environment.GetEnvironmentVariable("BUILD_VERSION")
-                          ?? assembly.GetName().Version?.ToString()
-                          ?? "1.0.0",
+            version     = commit == "unknown"
+                          ? (Environment.GetEnvironmentVariable("BUILD_VERSION") ?? assembly.GetName().Version?.ToString() ?? "1.0.0")
+                          : $"{commitShort}{dirtySuffix}",
             environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production",
             commit_hash = commit,
-            commit_short = commit == "unknown" ? "unknown" : commit[..Math.Min(commit.Length, 8)],
-            branch      = Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "unknown",
+            commit_short = commitShort,
+            branch      = branch,
             build_time  = Environment.GetEnvironmentVariable("BUILD_TIME") ?? "unknown",
+            git_status_source = git is not null ? "services-status-snapshot" : "container-env-fallback",
             started_at  = startedAt,
             uptime_seconds = (long)Math.Max(0, (DateTime.UtcNow - startedAt).TotalSeconds),
             timestamp   = DateTime.UtcNow,
         };
+    }
+
+    private sealed record GitInfo(string Commit, string CommitShort, string Branch, bool Dirty);
+
+    private static GitInfo? LoadGitInfo()
+    {
+        var path = Path.Combine(StatusRoot, ".services-status.json");
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("git", out var git) || git.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var commit = GetString(git, "commit");
+            if (string.IsNullOrWhiteSpace(commit) || commit == "unknown") return null;
+
+            return new GitInfo(
+                commit,
+                GetString(git, "commit_short") ?? commit[..Math.Min(commit.Length, 8)],
+                GetString(git, "branch") ?? "unknown",
+                git.TryGetProperty("dirty", out var dirtyEl) && dirtyEl.ValueKind == JsonValueKind.True);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static ServiceSnapshot? LoadServiceStatus()
