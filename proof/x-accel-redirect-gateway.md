@@ -100,5 +100,53 @@ işlevsel bir öncelik değil.
   proxy akışını** kullanıyor (byte FileServiceApi→YonetimApi→Gateway üzerinden akıyor) —
   `file-service-api-contract.md`'nin kendi ayrımına göre bu zaten beklenen: X-Accel/ticket modeli özellikle
   "performans baskısı" senaryoları için V2 opsiyonu, V1 baseline'ı değiştirmiyor.
-- Client React uygulaması ticket sistemini hiç kullanmıyor (backend-only özellik, doğrulandı — kod
-  tabanında hiç referans yok), bu yüzden bu değişiklik hiçbir frontend kodunu etkilemedi/kırmadı.
+
+---
+
+## Frontend Entegrasyonu (2026-07-02) — Artık Backend-Only Değil
+
+Kullanıcı, "ticket sistemi backend-only kaldı" notunu işaret edip mantıklı olan yerde client'a entegre
+edilmesini istedi. Client'ın **hiç önizleme yapmadığı**, sadece "indir" butonuyla dosyayı diske
+kaydettiği doğrulandı (kod incelemesi) — bu tam olarak ticket+X-Accel'in tasarlandığı senaryo. Sadece
+personel dosyaları değiştirildi; araç (FlotaApi) dosyaları eski blob akışında bırakıldı çünkü FlotaApi'de
+ticket endpoint'i henüz yok (dürüst kapsam sınırı, sahte tutarlılık için icat edilmedi).
+
+### Ne değişti
+
+- `client/src/api.ts`: `createDownloadTicket()` eklendi (ticket alıp `downloadUrl` döner);
+  kullanılmayan `fetchFileBlob()` (artık çağrılmıyordu) kaldırıldı.
+- `client/src/components/FileCard.tsx`: `onDownload` artık iki sonucu da destekliyor — `{ url }` (ticket,
+  tarayıcı native indirme) veya `{ blob, contentType, fileName }` (eski, araç dosyaları için hâlâ geçerli).
+- `client/src/components/PersonnelFileView.tsx`: `fetchFileBlob` yerine `createDownloadTicket` çağırıyor.
+- `VehicleFileView.tsx`: **değiştirilmedi** — hâlâ blob akışını kullanıyor (FlotaApi'de ticket yok).
+
+### Gerçek Tarayıcı Testi (Playwright, headless Chromium)
+
+Kod değişikliğinin gerçekten çalıştığını kanıtlamak için gerçek bir tarayıcıda uçtan uca test yapıldı
+(curl simülasyonu değil — gerçek DOM tıklamaları, gerçek React render, gerçek indirme olayı):
+
+1. `https://192.168.64.5:5090` açıldı, `hr001`/`Demo1234!` ile **gerçek login formu** dolduruldu.
+2. Arama kutusuna "P001" yazıldı, sonuç listesinde beliren personel kartına **gerçek tıklama** yapıldı.
+3. Dosya listesindeki "İndir" butonuna **gerçek tıklama** yapıldı.
+4. Tarayıcının **gerçek `download` olayı** yakalandı:
+   ```
+   download url: https://192.168.64.5:5090/files/download/U3jezDYlbz5n-2i_mOx7wySS5mJ0qQb-gi6GBwI_Axk
+   suggestedFilename: 33fa4cbb-8723-4753-b42c-be06d2bb8b12.pdf
+   indirilen boyut: 110567 byte
+   ```
+   URL'in gerçekten yeni `/files/download/{ticket}` (Gateway/X-Accel) yolu olduğu doğrulandı.
+5. İndirilen dosyanın SHA256'sı, aynı dosyanın doğrudan (cookie tabanlı) indirilen haliyle **birebir
+   eşleşti** (`8e6352c9...`).
+6. Konsol hataları kontrol edildi: tek görülen `401`, sayfa her açıldığında `App.tsx`'in mevcut oturumu
+   geri yüklemek için yaptığı `bffRefresh()` çağrısının (henüz login olunmadan) normal, önceden var olan,
+   bu değişiklikle ilgisiz davranışı — kod incelemesiyle doğrulandı.
+
+**Not:** `npx playwright install chromium` ile bu ortamda headless Chromium indirilip kuruldu; test
+`/private/tmp/.../scratchpad/browser-download-test.mjs` script'iyle çalıştırıldı, sonrasında geçici
+dosyalar temizlendi.
+
+### Client Build ve Regresyon
+
+`npm run build` (tsc -b + vite build) hatasız geçti. Değişiklik sunucuya deploy edilip client container
+rebuild edildi, üretilen JS bundle'da yeni `download-ticket` kodu doğrulandı, tam smoke test (23/23)
+regresyonsuz geçti.

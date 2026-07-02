@@ -2,11 +2,19 @@ import { useState } from 'react'
 import type { PersonnelFile } from '../types'
 import { RELATION_TYPE_LABELS } from '../types'
 
+// İki indirme modu desteklenir:
+//   - { url }  → ticket tabanlı (personel dosyaları): tarayıcı doğrudan Gateway'in
+//                X-Accel-Redirect ile servis ettiği URL'e gider, Blob'a gerek yok.
+//   - { blob } → eski proxy tabanlı (araç dosyaları — FlotaApi'de ticket henüz yok).
+type DownloadResult =
+  | { url: string }
+  | { blob: Blob; contentType: string; fileName: string }
+
 interface Props {
   file: PersonnelFile
   writable: boolean
   onArchived: () => void
-  onDownload?: (() => Promise<{ blob: Blob; contentType: string; fileName: string }>) | null
+  onDownload?: (() => Promise<DownloadResult>) | null
   onArchive?: (() => Promise<void>) | null
 }
 
@@ -39,13 +47,21 @@ export default function FileCard({ file, writable, onArchived, onDownload, onArc
     setDownloading(true)
     setError('')
     try {
-      const { blob, fileName } = await onDownload()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = fileName || displayName
-      a.click()
-      URL.revokeObjectURL(url)
+      const result = await onDownload()
+      if ('url' in result) {
+        // Ticket URL'i — sunucu zaten Content-Disposition: attachment döndürüyor,
+        // tarayıcı native indirmeyi tetikler, Blob/object-URL'e gerek yok.
+        const a = document.createElement('a')
+        a.href = result.url
+        a.click()
+      } else {
+        const url = URL.createObjectURL(result.blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = result.fileName || displayName
+        a.click()
+        URL.revokeObjectURL(url)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'İndirme hatası')
     } finally {

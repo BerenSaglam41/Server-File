@@ -2241,8 +2241,30 @@ nginx'in kendi şemasıyla hâlâ çalışıyor); istenirse V2'de düzeltilebili
 ### Kapsam dışı (bilinçli)
 
 Ticket dışı normal indirme endpoint'leri hâlâ V1 backend proxy akışını kullanıyor (bilinçli, yukarıya
-bakın). Client React uygulaması ticket sistemini hiç kullanmıyor (backend-only, doğrulandı) — bu değişiklik
-hiçbir frontend kodunu etkilemedi.
+bakın).
+
+### Frontend Entegrasyonu TAMAMLANDI (2026-07-02) — Artık Backend-Only Değil
+
+Kullanıcı "backend-only kaldı" notunu işaret edip client'a entegrasyonu istedi. Client'ın hiç önizleme
+yapmadığı, sadece "indir" butonuyla dosyayı diske kaydettiği doğrulandı — tam olarak ticket+X-Accel'in
+tasarlandığı senaryo. Sadece **personel** dosyaları değiştirildi; araç (FlotaApi) dosyaları eski blob
+akışında bırakıldı çünkü FlotaApi'de ticket endpoint'i henüz yok (dürüst kapsam sınırı).
+
+- `client/src/api.ts`: `createDownloadTicket()` eklendi, kullanılmayan `fetchFileBlob()` kaldırıldı.
+- `client/src/components/FileCard.tsx`: `onDownload` artık hem `{url}` (ticket) hem `{blob,...}` (eski,
+  araç dosyaları) sonucunu destekliyor.
+- `client/src/components/PersonnelFileView.tsx`: `createDownloadTicket` kullanıyor.
+- `VehicleFileView.tsx`: değiştirilmedi.
+
+**Gerçek tarayıcı testi (Playwright, headless Chromium):** curl simülasyonu değil — bu ortamda
+`npx playwright install chromium` ile kurulup gerçek DOM etkileşimleriyle test edildi: gerçek login formu
+dolduruldu, gerçek arama yapıldı, gerçek personel kartına tıklandı, gerçek "İndir" butonuna tıklandı,
+tarayıcının gerçek `download` olayı yakalandı. İndirme URL'i doğrulandı (`/files/download/{ticket}`,
+Gateway/X-Accel yolu), indirilen dosya (110567 byte) SHA256'sı doğrudan indirmeyle **birebir eşleşti**.
+Tek konsol hatası (`401`), sayfa açılışındaki mevcut-oturum-kontrolü (`bffRefresh()`) — bu değişiklikle
+ilgisiz, önceden var olan davranış, kod incelemesiyle doğrulandı. `npm run build` hatasız, client
+container rebuild edildi, tam smoke test (23/23) regresyonsuz. Tam kanıt:
+`proof/x-accel-redirect-gateway.md` → "Frontend Entegrasyonu" bölümü.
 
 ---
 

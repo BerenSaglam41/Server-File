@@ -118,15 +118,21 @@ export async function archiveSinglePrimary(personnelId: string, relationType: st
   if (!res.ok) throw new Error('Arşivleme başarısız')
 }
 
-export async function fetchFileBlob(
+// Ticket bazlı indirme: byte artık YonetimApi/FileServiceApi'den değil, Gateway'den
+// (X-Accel-Redirect) akar. Tarayıcı ticket URL'ine doğrudan gider — dosya JS
+// belleğinde Blob olarak arabelleğe alınmaz, tarayıcının native indirmesini kullanır.
+// Şu an sadece personel dosyaları için var (FlotaApi'ye henüz taşınmadı).
+export async function createDownloadTicket(
   personnelId: string,
   fileId: string,
-): Promise<{ blob: Blob; contentType: string; fileName: string }> {
+): Promise<{ downloadUrl: string }> {
   const res = await apiFetch(
-    `/api/personnel/${encodeURIComponent(personnelId)}/files/${fileId}/content`
+    `/api/personnel/${encodeURIComponent(personnelId)}/files/${fileId}/download-ticket`,
+    { method: 'POST' }
   )
-  if (!res.ok) throw new Error('İndirme başarısız')
-  return extractBlob(res)
+  if (res.status === 403) throw new Error('İndirme için yetkiniz yok')
+  if (!res.ok) throw new Error('İndirme bileti alınamadı')
+  return res.json()
 }
 
 // ─── FLEET (FİLO) ────────────────────────────────────────────────────────────

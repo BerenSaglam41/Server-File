@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { AuthState, Personnel, PersonnelFile } from '../types'
 import { RELATION_TYPE_LABELS, SINGLE_PRIMARY_TYPES, UPLOAD_RELATION_TYPES } from '../types'
-import { getPersonnelFiles, uploadFile, archiveFile, archiveSinglePrimary, fetchFileBlob } from '../api'
+import { getPersonnelFiles, uploadFile, archiveFile, archiveSinglePrimary, createDownloadTicket } from '../api'
 import { canWrite } from '../auth'
 import FileCard from './FileCard'
 import UploadModal from './UploadModal'
@@ -153,7 +153,10 @@ export default function PersonnelFileView({ personnel, auth, onBack }: Props) {
                     file={f}
                     writable={writable}
                     onArchived={loadFiles}
-                    onDownload={() => fetchFileBlob(personnel.personnelId, f.fileId)}
+                    onDownload={async () => {
+                      const { downloadUrl } = await createDownloadTicket(personnel.personnelId, f.fileId)
+                      return { url: downloadUrl }
+                    }}
                     onArchive={
                       SINGLE_PRIMARY_TYPES.has(f.relationType)
                         ? () => archiveSinglePrimary(personnel.personnelId, f.relationType)
