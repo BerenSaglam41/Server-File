@@ -84,6 +84,7 @@ builder.Services.AddHttpClient("FilesPublisher", client =>
     return handler;
 });
 builder.Services.AddScoped<IFilesPublisherClient, FilesPublisherClient>();
+builder.Services.AddScoped<IVirusScanService, ClamAvVirusScanService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

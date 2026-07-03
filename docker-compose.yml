@@ -42,6 +42,22 @@ services:
     networks:
       - platform-net
 
+  # ── ClamAV (virus/malware tarama, fail-closed) ─────────────────────────────
+  # clamav-debian (clamav/clamav DEĞİL) kullanılıyor — arm64 destekliyor (ARM64
+  # UTM VM'lerinde çalışmak için gerekli, clamav/clamav sadece amd64 sağlıyor).
+  clamav:
+    image: clamav/clamav-debian:stable
+    volumes:
+      - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    networks:
+      - platform-net
+
   # ── FileServiceApi ─────────────────────────────────────────────────────────
   fileservice:
     build:
@@ -66,6 +82,8 @@ services:
       FilesPublisher__ClientCertPath: "/certs/fileservice-client.crt"
       FilesPublisher__ClientKeyPath:  "/certs/fileservice-client.key"
       FilesPublisher__CaCertPath:     "/certs/ca.crt"
+      ClamAv__Host: "clamav"
+      ClamAv__Port: "3310"
     volumes:
       # :ro — FileServiceApi artık dosya yazmıyor (upload FilesPublisher'a taşındı),
       # bu mount sadece stream/read için kullanılıyor. Container seviyesinde salt-okunur.
@@ -80,6 +98,8 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+      clamav:
+        condition: service_started
     networks:
       - platform-net
 
@@ -213,6 +233,7 @@ networks:
 
 volumes:
   postgres_data:
+  clamav_data:
 
 # Gateway: nginx:alpine — nginx/nginx.conf ile konfigüre edilir. Build adımı yok.
 # .NET servisleri (FileServiceApi, YonetimApi, FlotaApi) container içinde çalışır.

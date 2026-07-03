@@ -2398,6 +2398,36 @@ doğru anlatıyordu, değişiklik gerekmedi.
 
 ---
 
+## Platform Mimarisi Rehberi Hizalaması — Faz A (TAMAMLANDI ✅ — 2026-07-03)
+
+Kullanıcı, `PROJE/platform-mimarisi-stajyer-rehberi.txt` (organizasyondan gelen hedef mimari belgesi)
+ile mevcut kodun hizalanmasını istedi. Belge çok daha büyük bir kapsam tanımlıyor (5 sunucu, LDAP,
+ExternalHub) — kullanıcı mevcut 2 VM altyapıda kalıp sadece özellik seviyesindeki gereksinimleri
+tamamlamaya karar verdi. Aşamalı bir plan çıkarıldı (Faz A/B/C), Faz A tamamlandı:
+
+- **A1 — ClamAV fail-closed virus tarama**: Upload akışına eklendi (`docker-compose.yml` + yeni
+  `FileServiceApi/Services/VirusScanService.cs`, ham TCP INSTREAM protokolü, kütüphanesiz). **ARM64
+  uyumluluk bulgusu**: resmi `clamav/clamav:stable` sadece amd64 destekliyor, bu VM'ler ARM64 olduğu
+  için `clamav/clamav-debian:stable` kullanıldı (ClamAV'ın kendi resmi arm64-destekli varyantı). Gerçek
+  EICAR testi (PDF FlateDecode stream içine gömülü) gerçek upload endpoint'i üzerinden `422
+  virus_detected` ile reddedildi; clamd kapatılınca `503 scan_unavailable` (fail-closed) doğrulandı.
+- **A2 — Archive endpoint cross-app yetki boşluğu**: `ArchiveFileAsync`'te sadece domain kontrolü vardı,
+  referans-sahiplik kontrolü yoktu — gerçek bir yapısal zayıflık, düzeltildi. Kullanıcı izniyle canlı
+  cross-app archive denemesi (`filoapi` policy'si geçici genişletilip test edildi, hemen geri alındı)
+  → `404`, doğru şekilde engellendi.
+- **A3 — `azp`/`client_id` tutarlılık kontrolü**: `ExtractAppCode`'a eklendi, token confusion'a karşı.
+- **A4 — No-leak 404 gözden geçirmesi**: Review sırasında A2'yle AYNI zayıflığın `ResolveAsync`,
+  `GetMetadataAsync`, `GetContentAsync`'te de olduğu bulundu, kullanıcı onayıyla hepsi düzeltildi.
+
+Tam regresyon (smoke 23/23, safe-test-suite 36/36, backup/restore) her adımda tekrar çalıştırıldı.
+Tam kanıt: `proof/faz-a-guvenlik-sertlestirme.md`.
+
+**Sıradaki:** Faz B (referans-bazlı archive endpoint'i + YAGNI kararları — `app_clients` tablosu,
+`storage_backend_id`/`zone` kolonları, public/private zone kullanıcı onayı bekliyor), Faz C (yerel
+yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım konuşması gerektirir, henüz başlanmadı).
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret

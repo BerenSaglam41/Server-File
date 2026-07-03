@@ -23,8 +23,18 @@ public static class FileEndpoints
         group.MapPost("/{fileId}/archive", ArchiveFileAsync);
     }
 
-    internal static string? ExtractAppCode(ClaimsPrincipal user) =>
-        user.FindFirst("app_code")?.Value ?? user.FindFirst("azp")?.Value;
+    internal static string? ExtractAppCode(ClaimsPrincipal user)
+    {
+        // azp ve client_id birlikte bulunup farklıysa token reddedilir (token confusion'a
+        // karşı ek katman) — Keycloak'ın client_credentials token'ları normalde ikisini de
+        // aynı değerle üretir (doğrulandı: azp=client_id=app_code=client kodu).
+        var azp = user.FindFirst("azp")?.Value;
+        var clientId = user.FindFirst("client_id")?.Value;
+        if (!string.IsNullOrEmpty(azp) && !string.IsNullOrEmpty(clientId) && azp != clientId)
+            return null;
+
+        return user.FindFirst("app_code")?.Value ?? azp;
+    }
 
     // ─── RESOLVE ─────────────────────────────────────────────────────────────
     private static async Task<IResult> ResolveAsync(
@@ -62,10 +72,13 @@ public static class FileEndpoints
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
+        // app_code filtresi: domain izni tek başına sahiplik kanıtı değildir (bkz. A2/A4
+        // bulgusu — ArchiveFileAsync'teki aynı zayıflık burada da vardı).
         var reference = await db.References
             .Where(r => r.EntityType == entityType
                      && r.EntityId == entityId
                      && r.RelationType == relationType
+                     && r.AppCode == appCode
                      && r.IsPrimary
                      && r.Status == "active")
             .FirstOrDefaultAsync();
@@ -143,6 +156,16 @@ public static class FileEndpoints
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
+        // Domain izni tek başına sahiplik kanıtı değildir — çağıran app'in bu fileId'ye
+        // ait aktif bir referansı yoksa no-leak 404 (bkz. A2/A4 bulgusu).
+        var ownsReference = await db.References
+            .AnyAsync(r => r.FileId == fileId && r.AppCode == appCode && r.Status == "active");
+        if (!ownsReference)
+        {
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "denied", "reference_ownership_denied", correlationId, clientIp, userAgent);
+            return Results.NotFound();
+        }
+
         await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "success", null, correlationId, clientIp, userAgent);
 
         return Results.Ok(new
@@ -201,6 +224,16 @@ public static class FileEndpoints
         {
             await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "denied", "policy_denied", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
+        }
+
+        // Domain izni tek başına sahiplik kanıtı değildir — çağıran app'in bu fileId'ye
+        // ait aktif bir referansı yoksa no-leak 404 (bkz. A2/A4 bulgusu).
+        var ownsReference = await db.References
+            .AnyAsync(r => r.FileId == fileId && r.AppCode == appCode && r.Status == "active");
+        if (!ownsReference)
+        {
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "read", "denied", "reference_ownership_denied", correlationId, clientIp, userAgent);
+            return Results.NotFound();
         }
 
         return await StreamContentAsync(request, response, fileObject, audit, config, appCode, actor, correlationId, clientIp, userAgent);
@@ -266,7 +299,8 @@ public static class FileEndpoints
         AuditService audit,
         IConfiguration config,
         ILoggerFactory loggerFactory,
-        IFilesPublisherClient publisher)
+        IFilesPublisherClient publisher,
+        IVirusScanService virusScan)
     {
         var logger = loggerFactory.CreateLogger("FileServiceApi.FileUpload");
         var appCode = ExtractAppCode(request.HttpContext.User);
@@ -337,6 +371,25 @@ public static class FileEndpoints
             {
                 await audit.WriteAsync(null, appCode, actor, "create", "denied", "magic_byte_mismatch", correlationId, clientIp, userAgent);
                 return Results.Json(new { error = "unsupported_media_type" }, statusCode: 415);
+            }
+        }
+
+        // Fail-closed virus/malware tarama: clamd'e ulaşılamıyorsa veya sonuç
+        // belirsizse dosya YAYINLANMAZ — "muhtemelen temizdir" varsayılmaz.
+        using (var scanStream = file.OpenReadStream())
+        {
+            var scanResult = await virusScan.ScanAsync(scanStream);
+            if (scanResult.Outcome == VirusScanOutcome.Infected)
+            {
+                logger.LogWarning("Virus taraması dosyayı reddetti. appCode={AppCode} detail={Detail}", appCode, scanResult.Detail);
+                await audit.WriteAsync(null, appCode, actor, "create", "denied", "virus_detected", correlationId, clientIp, userAgent);
+                return Results.Json(new { error = "virus_detected" }, statusCode: 422);
+            }
+            if (scanResult.Outcome == VirusScanOutcome.Unavailable)
+            {
+                logger.LogError("Virus tarama servisine ulaşılamadı, fail-closed uygulandı. appCode={AppCode} detail={Detail}", appCode, scanResult.Detail);
+                await audit.WriteAsync(null, appCode, actor, "create", "error", "scan_unavailable", correlationId, clientIp, userAgent);
+                return Results.Json(new { error = "scan_unavailable" }, statusCode: 503);
             }
         }
 
@@ -688,14 +741,22 @@ public static class FileEndpoints
         if (fileObject.Status != "active")
             return Results.Ok(new { fileId = fileObject.FileId, status = fileObject.Status, message = "already_archived" });
 
+        // Domain izni tek başına sahiplik kanıtı değildir — çağıran app'in bu fileId'ye
+        // ait aktif bir referansı olmadan arşivleme yapılamaz. Bu kontrol olmadan, aynı
+        // domain'e izinli farklı bir app_code başka bir app'in dosyasını (fileId tahmin/
+        // enumerate ederek) arşivleyebilirdi.
+        var reference = await db.References
+            .Where(r => r.FileId == fileId && r.AppCode == appCode && r.IsPrimary && r.Status == "active")
+            .FirstOrDefaultAsync();
+        if (reference is null)
+        {
+            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "denied", "reference_ownership_denied", correlationId, clientIp, userAgent);
+            return Results.NotFound();
+        }
+
         fileObject.Status = "archived";
         fileObject.UpdatedAt = DateTime.UtcNow;
-
-        var reference = await db.References
-            .Where(r => r.FileId == fileId && r.IsPrimary && r.Status == "active")
-            .FirstOrDefaultAsync();
-        if (reference is not null)
-            reference.Status = "revoked";
+        reference.Status = "revoked";
 
         try
         {
