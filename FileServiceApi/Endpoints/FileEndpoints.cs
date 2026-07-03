@@ -20,7 +20,13 @@ public static class FileEndpoints
         group.MapGet("/{fileId}/content", GetContentAsync);
         group.MapGet("/{fileId}", GetMetadataAsync);
         group.MapPost("", CreateFileAsync);
-        group.MapPost("/{fileId}/archive", ArchiveFileAsync);
+
+        // Referans-bazlı archive (B1 — platform-mimarisi-stajyer-rehberi.txt 9.2/9.9 hedef modeli):
+        // eski /internal/files/{fileId}/archive kaldırıldı, obje değil REFERANS arşivlenir — bir obje
+        // birden fazla app/entity tarafından referanslanabildiğinde, sadece çağıranın kendi referansı
+        // iptal edilir; obje ancak başka aktif referans kalmadığında archived'a düşer.
+        var refGroup = app.MapGroup("/internal/references").RequireAuthorization();
+        refGroup.MapPost("/{referenceId}/archive", ArchiveReferenceAsync);
     }
 
     internal static string? ExtractAppCode(ClaimsPrincipal user)
@@ -104,6 +110,7 @@ public static class FileEndpoints
         return Results.Ok(new
         {
             fileId = fileObject.FileId,
+            referenceId = reference.Id,
             domain = fileObject.Domain,
             relationType = reference.RelationType,
             contentType = fileObject.ContentType,
@@ -629,21 +636,29 @@ public static class FileEndpoints
         if (policy is null || !policy.CanRead || !policy.AllowedDomains.Contains(domain))
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
 
-        // references + objects join: hem referans hem nesne aktif, hem domain hem entityType eşleşmeli
-        var owned = await db.References
+        // references + objects join: hem referans hem nesne aktif, hem domain hem entityType eşleşmeli.
+        // AppCode filtresi de eklendi (bkz. A2/A4 bulgusu) — çağıran app'in KENDİ referansı olmalı,
+        // sadece domain/entity eşleşmesi yeterli sahiplik kanıtı değildir.
+        var reference = await db.References
             .Join(db.Objects,
                 r => r.FileId,
                 o => o.FileId,
                 (r, o) => new { r, o })
-            .AnyAsync(x =>
+            .Where(x =>
                 x.r.FileId     == fileId     &&
                 x.r.EntityId   == entityId   &&
                 x.r.EntityType == entityType &&
+                x.r.AppCode    == appCode    &&
                 x.r.Status     == "active"   &&
                 x.o.Domain     == domain     &&
-                x.o.Status     == "active");
+                x.o.Status     == "active")
+            .Select(x => new { x.r.Id })
+            .FirstOrDefaultAsync();
 
-        return Results.Ok(new { owned });
+        if (reference is null)
+            return Results.Ok(new { owned = false });
+
+        return Results.Ok(new { owned = true, referenceId = reference.Id });
     }
 
     // ─── MAGIC-BYTE KONTROLÜ ─────────────────────────────────────────────────
@@ -696,10 +711,10 @@ public static class FileEndpoints
         };
     }
 
-    // ─── ARCHIVE ─────────────────────────────────────────────────────────────
-    private static async Task<IResult> ArchiveFileAsync(
+    // ─── ARCHIVE (referans-bazlı) ────────────────────────────────────────────
+    private static async Task<IResult> ArchiveReferenceAsync(
         HttpRequest request,
-        Guid fileId,
+        long referenceId,
         AppDbContext db,
         AuditService audit)
     {
@@ -723,40 +738,47 @@ public static class FileEndpoints
             return Results.Json(new { error = "forbidden" }, statusCode: 403);
         }
 
-        var fileObject = await db.Objects.FindAsync(fileId);
+        var reference = await db.References.FindAsync(referenceId);
 
-        if (fileObject is null)
-        {
-            await audit.WriteAsync(null, appCode, actor, "archive", "not_found", "object_not_found", correlationId, clientIp, userAgent);
-            return Results.NotFound();
-        }
-
-        if (!policy.AllowedDomains.Contains(fileObject.Domain))
-        {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "denied", "policy_denied", correlationId, clientIp, userAgent);
-            return Results.Json(new { error = "forbidden" }, statusCode: 403);
-        }
-
-        // active dışındaki tüm durumlarda (archived/revoked/deleted) idempotent 200
-        if (fileObject.Status != "active")
-            return Results.Ok(new { fileId = fileObject.FileId, status = fileObject.Status, message = "already_archived" });
-
-        // Domain izni tek başına sahiplik kanıtı değildir — çağıran app'in bu fileId'ye
-        // ait aktif bir referansı olmadan arşivleme yapılamaz. Bu kontrol olmadan, aynı
-        // domain'e izinli farklı bir app_code başka bir app'in dosyasını (fileId tahmin/
-        // enumerate ederek) arşivleyebilirdi.
-        var reference = await db.References
-            .Where(r => r.FileId == fileId && r.AppCode == appCode && r.IsPrimary && r.Status == "active")
-            .FirstOrDefaultAsync();
         if (reference is null)
         {
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "denied", "reference_ownership_denied", correlationId, clientIp, userAgent);
+            await audit.WriteAsync(null, appCode, actor, "archive", "not_found", "reference_not_found", correlationId, clientIp, userAgent);
             return Results.NotFound();
         }
 
-        fileObject.Status = "archived";
-        fileObject.UpdatedAt = DateTime.UtcNow;
+        // Sahiplik kontrolü: sadece referansın kendi app_code'u onu arşivleyebilir —
+        // domain izni tek başına sahiplik kanıtı değildir (bkz. A2/A4 bulgusu).
+        if (reference.AppCode != appCode)
+        {
+            await audit.WriteAsync(reference.FileId, appCode, actor, "archive", "denied", "reference_ownership_denied", correlationId, clientIp, userAgent);
+            return Results.NotFound();
+        }
+
+        // active dışındaki tüm durumlarda (revoked) idempotent 200
+        if (reference.Status != "active")
+            return Results.Ok(new { referenceId = reference.Id, fileId = reference.FileId, status = reference.Status, message = "already_archived" });
+
+        var fileObject = await db.Objects.FindAsync(reference.FileId);
+        if (fileObject is null)
+        {
+            await audit.WriteAsync(reference.FileId, appCode, actor, "archive", "error", "object_not_found", correlationId, clientIp, userAgent);
+            return Results.Json(new { error = "internal_error" }, statusCode: 500);
+        }
+
         reference.Status = "revoked";
+
+        // Cascade: obje birden fazla app/entity tarafından referanslanabilir (B1 hedef modeli,
+        // platform-mimarisi-stajyer-rehberi.txt 9.2/9.9). Sadece bu referans iptal edilirken, aynı
+        // fileId'ye ait BAŞKA aktif referans yoksa obje de archived'a düşer; varsa obje ready/active
+        // kalır (başka app hâlâ kullanıyor demektir).
+        var hasOtherActiveReferences = await db.References
+            .AnyAsync(r => r.FileId == reference.FileId && r.Id != referenceId && r.Status == "active");
+
+        if (!hasOtherActiveReferences && fileObject.Status == "active")
+        {
+            fileObject.Status = "archived";
+            fileObject.UpdatedAt = DateTime.UtcNow;
+        }
 
         try
         {
@@ -768,12 +790,12 @@ public static class FileEndpoints
             // entity'lerle tekrar karşılaşıp patlamasın diye önce temizleniyor (bkz. CreateFileAsync'teki
             // aynı düzeltme — canlı testte bulunan gerçek bug).
             db.ChangeTracker.Clear();
-            await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "error", "db_update_failed", correlationId, clientIp, userAgent);
+            await audit.WriteAsync(reference.FileId, appCode, actor, "archive", "error", "db_update_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "internal_error" }, statusCode: 500);
         }
 
-        await audit.WriteAsync(fileObject.FileId, appCode, actor, "archive", "success", null, correlationId, clientIp, userAgent);
+        await audit.WriteAsync(reference.FileId, appCode, actor, "archive", "success", null, correlationId, clientIp, userAgent);
 
-        return Results.Ok(new { fileId = fileObject.FileId, status = fileObject.Status });
+        return Results.Ok(new { referenceId = reference.Id, fileId = reference.FileId, objectStatus = fileObject.Status });
     }
 }

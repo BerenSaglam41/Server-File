@@ -43,7 +43,7 @@ public static class DownloadTicketEndpoints
         var client = httpClientFactory.CreateClient("FileService");
 
         // fileId gerçekten bu personnelId'ye ait mi — PersonnelEndpoints ile aynı paylaşılan kontrol.
-        if (!await PersonnelEndpoints.FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId))
+        if (await PersonnelEndpoints.FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId) is null)
         {
             await audit.WriteAsync(personnelId, actor, "PersonnelDownloadTicketCreated", "denied", "file_scope_denied", correlationId);
             return Results.Json(new { error = "forbidden", reason = "file_scope_denied" }, statusCode: 403);

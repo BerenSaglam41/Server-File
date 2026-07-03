@@ -283,7 +283,7 @@ public static class VehicleEndpoints
         if (fileInfo is null) return Results.StatusCode(502);
 
         var serviceToken = await tokenService.GetServiceTokenAsync();
-        var archiveReq = new HttpRequestMessage(HttpMethod.Post, $"internal/files/{fileInfo.FileId}/archive");
+        var archiveReq = new HttpRequestMessage(HttpMethod.Post, $"internal/references/{fileInfo.ReferenceId}/archive");
         archiveReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         archiveReq.Headers.Add("X-Actor-User-Id",  actor);
         archiveReq.Headers.Add("X-Correlation-Id", correlationId);
@@ -376,6 +376,7 @@ public static class VehicleEndpoints
 
     private record FileResolveResult(
         [property: JsonPropertyName("fileId")]         Guid   FileId,
+        [property: JsonPropertyName("referenceId")]    long   ReferenceId,
         [property: JsonPropertyName("domain")]         string Domain,
         [property: JsonPropertyName("relationType")]   string RelationType,
         [property: JsonPropertyName("contentType")]    string ContentType,

@@ -291,7 +291,7 @@ public static class PersonnelEndpoints
         if (fileInfo is null) return Results.StatusCode(502);
 
         var serviceToken = await tokenService.GetServiceTokenAsync();
-        var archiveReq = new HttpRequestMessage(HttpMethod.Post, $"internal/files/{fileInfo.FileId}/archive");
+        var archiveReq = new HttpRequestMessage(HttpMethod.Post, $"internal/references/{fileInfo.ReferenceId}/archive");
         archiveReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         archiveReq.Headers.Add("X-Actor-User-Id",  actor);
         archiveReq.Headers.Add("X-Correlation-Id", correlationId);
@@ -434,7 +434,7 @@ public static class PersonnelEndpoints
         var client = httpClientFactory.CreateClient("FileService");
         var serviceToken = await tokenService.GetServiceTokenAsync();
 
-        if (!await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId, clientIp, userAgent))
+        if (await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId, clientIp, userAgent) is null)
         {
             await audit.WriteAsync(personnelId, actor, "PersonnelFileDownloaded", "denied", "file_scope_denied", correlationId);
             httpContext.Response.StatusCode = 403;
@@ -497,13 +497,14 @@ public static class PersonnelEndpoints
         var client = httpClientFactory.CreateClient("FileService");
         var serviceToken = await tokenService.GetServiceTokenAsync();
 
-        if (!await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId, clientIp, userAgent))
+        var referenceId = await FileBelongsToPersonnelAsync(client, tokenService, personnelId, fileId, actor, correlationId, clientIp, userAgent);
+        if (referenceId is null)
         {
             await audit.WriteAsync(personnelId, actor, "PersonnelFileArchived", "denied", "file_scope_denied", correlationId);
             return Results.Json(new { error = "forbidden", reason = "file_scope_denied" }, statusCode: 403);
         }
 
-        var archiveReq = new HttpRequestMessage(HttpMethod.Post, $"internal/files/{fileId}/archive");
+        var archiveReq = new HttpRequestMessage(HttpMethod.Post, $"internal/references/{referenceId}/archive");
         archiveReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serviceToken);
         archiveReq.Headers.Add("X-Actor-User-Id", actor);
         archiveReq.Headers.Add("X-Correlation-Id", correlationId);
@@ -571,7 +572,9 @@ public static class PersonnelEndpoints
         return req;
     }
 
-    internal static async Task<bool> FileBelongsToPersonnelAsync(
+    // Dönüş: null = ait değil/erişim yok, değer varsa dosyanın referenceId'si (B1 — referans-bazlı
+    // archive için gerekli, sadece bool "owned" artık yeterli değil).
+    internal static async Task<long?> FileBelongsToPersonnelAsync(
         HttpClient client,
         ITokenService tokenService,
         string personnelId,
@@ -593,14 +596,15 @@ public static class PersonnelEndpoints
 
         var resp = await client.SendAsync(checkReq);
         if (!resp.IsSuccessStatusCode)
-            return false;
+            return null;
 
         var result = await resp.Content.ReadFromJsonAsync<OwnershipResult>();
-        return result?.Owned == true;
+        return result?.Owned == true ? result.ReferenceId : null;
     }
 
     private record FileResolveResult(
         [property: JsonPropertyName("fileId")]         Guid   FileId,
+        [property: JsonPropertyName("referenceId")]    long   ReferenceId,
         [property: JsonPropertyName("domain")]         string Domain,
         [property: JsonPropertyName("relationType")]   string RelationType,
         [property: JsonPropertyName("contentType")]    string ContentType,
@@ -611,7 +615,8 @@ public static class PersonnelEndpoints
         [property: JsonPropertyName("status")]         string Status);
 
     internal record OwnershipResult(
-        [property: JsonPropertyName("owned")] bool Owned);
+        [property: JsonPropertyName("owned")]       bool  Owned,
+        [property: JsonPropertyName("referenceId")] long? ReferenceId);
 
     private static string? ParseErrorCode(string body)
     {

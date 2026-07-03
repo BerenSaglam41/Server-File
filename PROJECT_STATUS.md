@@ -2452,6 +2452,36 @@ PDF'i) kullanıcı onayıyla temizlendi.
 
 ---
 
+## Platform Mimarisi Rehberi Hizalaması — Faz B1 (TAMAMLANDI ✅ — 2026-07-03)
+
+`POST /internal/references/{referenceId}/archive` eklendi — rehber bölüm 9.2/9.9'un hedef modeli. Eski
+`POST /internal/files/{fileId}/archive` tamamen kaldırıldı (A2'nin düzelttiği domain-bazlı kontrol yerine
+artık referans-bazlı, doğru kapsamlı bir kontrol var). 3 servis güncellendi:
+
+- **FileServiceApi**: Yeni `/internal/references` grubu, `ArchiveReferenceAsync` — sahiplik kontrolü
+  (`reference.AppCode == callerAppCode`) + cascade mantığı (aynı `file_id`'ye ait başka aktif referans
+  yoksa obje de `archived` olur, varsa `active` kalır). `ResolveAsync`/`CheckOwnershipAsync` yanıtlarına
+  `referenceId` eklendi. **Ek bulgu:** `CheckOwnershipAsync`'te de A2/A4 ile aynı desendeki bir zayıflık
+  (app_code filtresi eksikti) bulunup düzeltildi.
+- **YonetimApi**: `FileBelongsToPersonnelAsync` artık `bool` yerine `long?` (referenceId) döndürüyor;
+  hem resolve-tabanlı hem fileId-tabanlı archive akışları yeni endpoint'i kullanıyor.
+- **FlotaApi**: Aynı desen uygulandı.
+
+**Test (kullanıcı izniyle, gerçek DB manipülasyonu dahil):** Normal archive akışları (3 servis, 2 farklı
+route deseni) regresyonsuz çalıştı. Cross-app engelleme (`filoapi` policy'si geçici genişletilip test
+edildi) → `404`. **Cascade davranışı** (B1'in asıl yeni özelliği) — geçici bir test referansı DB'ye
+eklenip: ilk referans archive edilince obje `active` KALDI (diğer referans hâlâ aktifti), ikinci
+(son) referans da archive edilince obje `archived` OLDU — tam beklenen davranış, test referansı
+sonrasında temizlendi. Tam regresyon (smoke 23/23, safe-test-suite 36/36) temiz.
+
+Tam kanıt: `proof/b1-referans-bazli-archive.md`.
+
+**Sıradaki:** Faz B2 (YAGNI kararları — `app_clients`, `storage_backend_id`/`zone`, public/private zone
+— kullanıcı onayı bekliyor), Faz C (yerel yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım
+konuşması gerektirir).
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
