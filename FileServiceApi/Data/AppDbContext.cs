@@ -31,6 +31,7 @@ public class AppDbContext : DbContext
             entity.Property(e => e.SizeBytes).HasColumnName("size_bytes");
             entity.Property(e => e.Sha256).HasColumnName("sha256");
             entity.Property(e => e.Classification).HasColumnName("classification");
+            entity.Property(e => e.StorageZone).HasColumnName("storage_zone");
             entity.Property(e => e.RetentionPolicy).HasColumnName("retention_policy");
             entity.Property(e => e.Status).HasColumnName("status");
             entity.Property(e => e.CreatedByApp).HasColumnName("created_by_app");

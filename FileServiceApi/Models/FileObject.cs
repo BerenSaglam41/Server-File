@@ -11,6 +11,7 @@ public class FileObject
     public long SizeBytes { get; set; }
     public string Sha256 { get; set; } = string.Empty;
     public string Classification { get; set; } = "internal";
+    public string StorageZone { get; set; } = "private";
     public string? RetentionPolicy { get; set; }
     public string Status { get; set; } = "active";
     public string CreatedByApp { get; set; } = string.Empty;

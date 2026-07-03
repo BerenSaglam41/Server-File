@@ -258,6 +258,10 @@ services:
       # export dizininin aynısı — Gateway'e AYRI bir NFS bağlantısı açılmıyor,
       # api-server'ın mevcut (ro) mount'u container'a bind-mount ediliyor.
       - ${STORAGE_PATH:-/Volumes/platform-files}/export:/protected-files:ro
+      # B3 — public zone: TAMAMEN AYRI bir salt-okunur mount, kimlik doğrulaması
+      # olmadan doğrudan servis edilir (X-Accel-Redirect/ticket YOK — public
+      # olmanın tanımı bu, File-Service/ticket-store veri yolunda değil).
+      - ${STORAGE_PATH:-/Volumes/platform-files}/export-public:/public-files:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://127.0.0.1:443/health || exit 1"]
       interval: 10s

@@ -9,8 +9,8 @@ namespace FileServiceApi.Services;
 // "kontrollü operasyon kullanıcısı" ilkesine uygun).
 public interface IFilesPublisherClient
 {
-    Task<(string Sha256, long SizeBytes)> PublishAsync(string relativePath, Stream content, long contentLength, CancellationToken ct = default);
-    Task DeleteAsync(string relativePath, CancellationToken ct = default);
+    Task<(string Sha256, long SizeBytes)> PublishAsync(string relativePath, Stream content, long contentLength, string zone = "private", CancellationToken ct = default);
+    Task DeleteAsync(string relativePath, string zone = "private", CancellationToken ct = default);
 }
 
 public class FilesPublisherException(HttpStatusCode statusCode, string body)
@@ -22,13 +22,13 @@ public class FilesPublisherException(HttpStatusCode statusCode, string body)
 public class FilesPublisherClient(IHttpClientFactory httpClientFactory) : IFilesPublisherClient
 {
     public async Task<(string Sha256, long SizeBytes)> PublishAsync(
-        string relativePath, Stream content, long contentLength, CancellationToken ct = default)
+        string relativePath, Stream content, long contentLength, string zone = "private", CancellationToken ct = default)
     {
         var client = httpClientFactory.CreateClient("FilesPublisher");
         using var streamContent = new StreamContent(content);
         streamContent.Headers.ContentLength = contentLength;
 
-        var resp = await client.PostAsync($"publish?relativePath={Uri.EscapeDataString(relativePath)}", streamContent, ct);
+        var resp = await client.PostAsync($"publish?relativePath={Uri.EscapeDataString(relativePath)}&zone={zone}", streamContent, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
 
         if (!resp.IsSuccessStatusCode)
@@ -40,12 +40,12 @@ public class FilesPublisherClient(IHttpClientFactory httpClientFactory) : IFiles
         return (sha256, sizeBytes);
     }
 
-    public async Task DeleteAsync(string relativePath, CancellationToken ct = default)
+    public async Task DeleteAsync(string relativePath, string zone = "private", CancellationToken ct = default)
     {
         try
         {
             var client = httpClientFactory.CreateClient("FilesPublisher");
-            await client.DeleteAsync($"publish?relativePath={Uri.EscapeDataString(relativePath)}", ct);
+            await client.DeleteAsync($"publish?relativePath={Uri.EscapeDataString(relativePath)}&zone={zone}", ct);
         }
         catch
         {

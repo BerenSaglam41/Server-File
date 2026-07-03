@@ -341,9 +341,21 @@ public static class FileEndpoints
         var relationType = form["relationType"].ToString();
         var classification = form["classification"].ToString();
         var originalFileName = form["originalFileName"].ToString();
+        var zone = form["zone"].ToString();
+
+        var effectiveClassification = string.IsNullOrEmpty(classification) ? "internal" : classification;
+        var effectiveZone = string.IsNullOrEmpty(zone) ? "private" : zone;
 
         if (file is null || file.Length == 0)
             return Results.BadRequest(new { error = "dosya bulunamadi" });
+
+        // B3 — güvenlik kısıtı: sadece "official" sınıflandırmalı dosyalar public olabilir.
+        // Yanlışlıkla hassas bir dosyanın herkese açık yayınlanmasına karşı ek koruma.
+        if (effectiveZone == "public" && effectiveClassification != "official")
+        {
+            await audit.WriteAsync(null, appCode, actor, "create", "denied", "zone_classification_mismatch", correlationId, clientIp, userAgent);
+            return Results.Json(new { error = "zone_classification_mismatch" }, statusCode: 400);
+        }
 
         if (!policy.AllowedDomains.Contains(domain) || !policy.AllowedFileTypes.Contains(relationType))
         {
@@ -444,7 +456,7 @@ public static class FileEndpoints
         try
         {
             using var uploadStream = file.OpenReadStream();
-            (sha256Hash, _) = await publisher.PublishAsync(relativePath, uploadStream, file.Length);
+            (sha256Hash, _) = await publisher.PublishAsync(relativePath, uploadStream, file.Length, effectiveZone);
         }
         catch (FilesPublisherException ex)
         {
@@ -482,7 +494,7 @@ public static class FileEndpoints
 
         if (existingDuplicateId.HasValue)
         {
-            await publisher.DeleteAsync(relativePath);
+            await publisher.DeleteAsync(relativePath, effectiveZone);
             await audit.WriteAsync(null, appCode, actor, "create", "denied", "duplicate_file", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "duplicate_file", existingFileId = existingDuplicateId.Value }, statusCode: 409);
         }
@@ -498,7 +510,8 @@ public static class FileEndpoints
             OriginalFileName = originalFileName,
             SizeBytes = file.Length,
             Sha256 = sha256Hash,
-            Classification = string.IsNullOrEmpty(classification) ? "internal" : classification,
+            Classification = effectiveClassification,
+            StorageZone = effectiveZone,
             Status = "active",
             CreatedByApp = appCode,
             CreatedByUser = actor,
@@ -536,7 +549,7 @@ public static class FileEndpoints
             logger.LogError(ex,
                 "DB insert başarısız oldu, export rollback yapılıyor. appCode={AppCode} domain={Domain} entityType={EntityType} entityId={EntityId} relationType={RelationType} relativePath={RelativePath} correlationId={CorrelationId}",
                 appCode, domain, entityType, entityId, relationType, relativePath, correlationId);
-            await publisher.DeleteAsync(relativePath);
+            await publisher.DeleteAsync(relativePath, effectiveZone);
             await audit.WriteAsync(null, appCode, actor, "create", "error", "db_insert_failed", correlationId, clientIp, userAgent);
             return Results.Json(new { error = "internal_error" }, statusCode: 500);
         }
@@ -552,7 +565,9 @@ public static class FileEndpoints
             extension = fileObject.Extension,
             sizeBytes = fileObject.SizeBytes,
             classification = fileObject.Classification,
-            status = fileObject.Status
+            status = fileObject.Status,
+            zone = fileObject.StorageZone,
+            publicUrl = fileObject.StorageZone == "public" ? $"/public/{fileObject.RelativePath}" : null
         });
     }
 

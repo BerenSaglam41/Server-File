@@ -8,6 +8,7 @@ User=files-writer
 Group=files-publishers
 Environment=STAGING_ROOT=/srv/files/staging
 Environment=EXPORT_ROOT=/srv/files/export
+Environment=EXPORT_ROOT_PUBLIC=/srv/files/export-public
 Environment=LISTEN_HOST=0.0.0.0
 Environment=LISTEN_PORT=6060
 Environment=SERVER_CERT=/etc/platform-certs/filespublisher.crt

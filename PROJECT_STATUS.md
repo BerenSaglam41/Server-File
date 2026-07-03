@@ -2482,6 +2482,38 @@ konuşması gerektirir).
 
 ---
 
+## Platform Mimarisi Rehberi Hizalaması — Faz B3 (TAMAMLANDI ✅ — 2026-07-03)
+
+Kullanıcı, B2'de YAGNI olarak işaretlenen public/private storage zone'unu (gerçek bir iş ihtiyacı
+olmadan) yine de inşa etmeye karar verdi — önce plan modunda tasarlanıp, sonra gerçek testlerle
+kanıtlanarak. Rehber bölüm 9.3/9.6'nın hedef modeli: public dosyalar File-Service/ticket-store'u hiç
+görmeden, doğrudan Gateway'in salt-okunur bir mount'undan servis edilir.
+
+**Risk minimize eden tasarım:** `relative_path` şeması DEĞİŞMEDİ (migrasyon yok) — sadece hangi fiziksel
+kök dizine (`/srv/files/export` vs yeni `/srv/files/export-public`) yazıldığı zone'a göre değişiyor.
+`FilesPublisher/publisher.py`'ye minimal değişiklik (zone query param'ına göre kök seçimi), NFS export
+hiç değişmedi (zaten `/srv/files`'in tamamını kapsıyordu). Yeni `storage_zone` kolonu + `zone=public`
+sadece `classification=official` ile kabul edilir kısıtı (yanlışlıkla hassas dosya public olamaz).
+Mevcut upload validasyon zinciri (magic-byte, ClamAV) zone'dan bağımsız aynen uygulanıyor.
+
+**Bulunan bug:** İlk testte public dosya `Content-Type: text/plain` döndü (PDF olmasına rağmen) —
+`nginx.conf`'ta `include mime.types` hiç yoktu (private/ticket akışı bunu hiç yaşamamıştı çünkü
+FileServiceApi Content-Type'ı zaten açıkça set ediyordu). Düzeltildi.
+
+**Test (6 senaryo, gerçek HTTP istekleriyle):** Public dosya oluşturma → `publicUrl` doğru döndü.
+**Sıfır kimlik doğrulamayla erişim** (hiçbir cookie/JWT/mTLS olmadan) → `200`, doğru içerik/Content-Type.
+İzolasyon (bilinen bir private dosyayı `/public/` altında deneme) → `404`. Zone/classification
+tutarsızlığı (`public`+`confidential`) → `400`. Public zone'a EICAR → `422 virus_detected` (fail-closed
+zincir zone'dan bağımsız çalışıyor). Tam regresyon (smoke 23/23, safe-test-suite 36/36, backup/restore)
+temiz.
+
+Tam kanıt: `proof/b3-public-private-zone.md`.
+
+**Bilinçli kalan sınırlar:** `app_policies`'e ayrı "public oluşturabilir mi" bayrağı yok; gerçek bir
+UI/iş akışı public dosya oluşturmayı tetiklemiyor (sadece altyapı/API seviyesinde inşa edildi).
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret

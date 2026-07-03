@@ -28,6 +28,9 @@ from urllib.parse import urlparse, parse_qs
 
 STAGING_ROOT = os.environ.get("STAGING_ROOT", "/srv/files/staging")
 EXPORT_ROOT = os.environ.get("EXPORT_ROOT", "/srv/files/export")
+# B3 — public/private zone: public dosyalar TAMAMEN AYRI bir fiziksel kök dizine yazılır
+# (savunma derinliği — bir path-traversal hatası bile iki ağacı birbirine karıştıramaz).
+EXPORT_ROOT_PUBLIC = os.environ.get("EXPORT_ROOT_PUBLIC", "/srv/files/export-public")
 LISTEN_HOST = os.environ.get("LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "6060"))
 SERVER_CERT = os.environ.get("SERVER_CERT", "/etc/platform-certs/filespublisher.crt")
@@ -90,9 +93,11 @@ class PublishHandler(BaseHTTPRequestHandler):
 
         query = parse_qs(parsed.query)
         relative_path = (query.get("relativePath") or [""])[0]
+        zone = (query.get("zone") or ["private"])[0]
+        export_root = EXPORT_ROOT_PUBLIC if zone == "public" else EXPORT_ROOT
 
         staging_full = resolve_safe_path(STAGING_ROOT, relative_path)
-        export_full = resolve_safe_path(EXPORT_ROOT, relative_path)
+        export_full = resolve_safe_path(export_root, relative_path)
         if staging_full is None or export_full is None:
             self._json_response(400, {"error": "invalid_path"})
             return
@@ -154,7 +159,9 @@ class PublishHandler(BaseHTTPRequestHandler):
 
         query = parse_qs(parsed.query)
         relative_path = (query.get("relativePath") or [""])[0]
-        export_full = resolve_safe_path(EXPORT_ROOT, relative_path)
+        zone = (query.get("zone") or ["private"])[0]
+        export_root = EXPORT_ROOT_PUBLIC if zone == "public" else EXPORT_ROOT
+        export_full = resolve_safe_path(export_root, relative_path)
         if export_full is None:
             self._json_response(400, {"error": "invalid_path"})
             return
