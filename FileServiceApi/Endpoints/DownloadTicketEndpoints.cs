@@ -204,8 +204,11 @@ public static class DownloadTicketEndpoints
             : fileObject.OriginalFileName;
         var asciiFallback = new string(rawName.Select(c => (c < 128 && c != '"' && c != '\\') ? c : '_').ToArray());
         var encodedName = Uri.EscapeDataString(rawName);
-        var imageExtensions = new[] { "jpg", "jpeg", "png", "webp" };
-        var disposition = imageExtensions.Contains(fileObject.Extension) ? "inline" : "attachment";
+        // Bu endpoint SADECE ticket tabanlı "İndir" akışı için var (bkz. FileCard.tsx handleDownload) —
+        // önizleme/inline görüntüleme amacı yok. FileEndpoints.StreamContentAsync'teki resimler için
+        // "inline" istisnası (o, /content endpoint'inin önizleme amacı için doğru) buraya kopyalanmıştı,
+        // bu yüzden fotoğraf indirmeleri tarayıcıda açılıyor, indirilmiyordu — kaldırıldı.
+        var disposition = "attachment";
 
         response.Headers["ETag"] = etag;
         response.Headers["Accept-Ranges"] = "bytes";

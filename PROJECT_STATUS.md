@@ -2344,6 +2344,34 @@ sıfırlama yerine temel ops-görünürlüğü/debugging için bilinçli bir den
 
 ---
 
+## Bug Fix: Ticket İndirmesinde Fotoğraflar İndirilmiyor, Tarayıcıda Açılıyordu (TAMAMLANDI ✅ — 2026-07-03)
+
+Kullanıcı bildirdi: HR olarak bir fotoğraf indirilince tarayıcı dosyayı indirmek yerine açıyor,
+`https://.../files/download/{ticket}` URL'ine navigasyon yapıyordu. Kök neden: `DownloadTicketEndpoints.cs`,
+`FileEndpoints.cs`'in **önizleme amaçlı** `/content` endpoint'inden kopyalanmış bir mantıkla, resim
+uzantıları (`jpg/jpeg/png/webp`) için `Content-Disposition: inline` dönüyordu. Ama ticket-consume
+endpoint'inin **tek amacı** "İndir" butonu akışı (frontend'de hiçbir yerde ticket URL'i `<img>` ile
+kullanılmıyor, sadece `<a>`+`.click()`, `download` attribute'u da yok — davranış tamamen sunucunun
+header'ına bağlı). PDF ile yapılan tüm önceki testler bu uzantı listesinde olmadığı için bug hiç ortaya
+çıkmamıştı.
+
+**Düzeltme:** `disposition` artık koşulsuz `"attachment"` — ticket-consume endpoint'i için resim/PDF ayrımı
+kaldırıldı. `FileEndpoints.cs`'teki `/content` (uygulama içi görüntüleme, farklı amaç) bilinçli olarak
+dokunulmadı.
+
+**Test:** Gerçek bir JPG dosyasıyla uçtan uca → `Content-Disposition: attachment` (düzeltme doğrulandı).
+PDF regresyonu → değişmedi, hâlâ `attachment`. Lease modeli (aynı ticket'la 3 ardışık istek) resimlerle de
+sorunsuz. Tam regresyon: smoke 23/23, safe-test-suite 36/36, backup/restore temiz.
+
+**Yan not (ayrı, ilgisiz operasyonel bulgu):** Deploy sırasında sunucunun 11 dakika önce reboot olduğu
+görüldü (bu oturumdaki işlemlerden bağımsız) — `docker-compose.yml`'de hiçbir servis için `restart:`
+politikası yok, bu yüzden reboot sonrası `postgres`/`keycloak` dışındaki servisler kendiliğinden ayağa
+kalkmamıştı, elle başlatıldı. Düzeltilmedi, V2 adayı olarak not edildi.
+
+Tam kanıt: `proof/ticket-download-content-disposition-fix.md`.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
@@ -2357,6 +2385,9 @@ sıfırlama yerine temel ops-görünürlüğü/debugging için bilinçli bir den
   tek komuta indirilebilir.
 - **Resilience test V1**: Safe test geçiyor; sıradaki kontrollü testler Gateway/OpsApi/FileService/Keycloak/PostgreSQL
   restart sonrası health, login, download ve ops dashboard toparlanma kontrolleri.
+- **`docker-compose.yml`'de `restart:` politikası yok** (2026-07-03'te bir VM reboot sırasında fark edildi):
+  host reboot/crash sonrası `postgres`/`keycloak` dışındaki hiçbir servis kendiliğinden ayağa kalkmıyor,
+  elle `docker compose up -d` gerekiyor. `restart: unless-stopped` eklenmesi düşünülebilir.
 - **Ops Dashboard V1 polish**: Read-only console artık `/ops/dashboard` üzerinden System Health, Services,
   Disk, Alerts, Backups ve Version metadata alır. Docker socket OpsApi'ye mount edilmez; servis listesi
   `tools/services-status.sh` tarafından yazılan status-file üzerinden okunur. Kalan polish: UI metriklerinin
