@@ -48,6 +48,11 @@ Sistemde iki ayrı domain var:
 | `personnel` | YonetimApi | `yonetimapi` | cv, photo, official_document, document, attachment |
 | `fleet` | FlotaApi | `filoapi` | photo, document, official_document, attachment, report |
 
+**Not:** Yukarıdaki diyagram, YonetimApi/FlotaApi üzerinden akan standart proxy zincirini gösterir
+(dosya görüntüleme, upload, arşivleme). Personel dosyalarının **ticket tabanlı indirmesi** ("İndir"
+butonu) bunun dışında, Gateway'in FileServiceApi'yi mTLS ile doğrudan çağırıp X-Accel-Redirect ile
+byte'ı kendisi servis ettiği **paralel, daha kısa bir yol** kullanır — bkz. bölüm 6.3-6.5.
+
 ---
 
 ## 2. Kimlik ve Token Sistemi
@@ -322,47 +327,67 @@ JWT ve mTLS birbirini ikame etmez; **her ikisi de aynı anda zorunlu**:
 
 ## 6. Dosya Depolama Modeli
 
-### 6.1 Fiziksel Yapı (Files-01 / NFS)
+**⚠️ Not (2026-07-03 itibarıyla güncellendi):** Bu bölüm, aşağıda anlatılan "FilesPublisher" modeliyle
+değiştirildi. FileServiceApi artık NFS'e **doğrudan yazmıyor** — kendi container mount'u salt-okunur
+(`:ro`). Yazma işlemleri (upload/archive) Files-01 üzerinde ayrı, mTLS ile korunan bir `FilesPublisher`
+servisine devredildi. Ayrıntılı kanıt: `proof/nfs-rw-to-publisher-model.md`.
+
+### 6.1 Fiziksel Yapı (Files-01 / NFS / Publisher)
 
 ```
-/app/storage/           ← container içi bağlama noktası
-  export/               ← ReadPath = kalıcı depolama (NFS export)
-    personnel/
-      ab/
-        cd/
-          abcd1234-....pdf     ← UUID bazlı shard
-    fleet/
-      ab/
-        cd/
-          abcd1234-....jpg
-    .probe                     ← health check (FileServiceApi okur)
-  staging/              ← StagingPath = geçici yazma alanı
-    personnel/
-      ...                      ← başarılı yüklemede buradan export'a taşınır
-    fleet/
-      ...
+Files-01 (192.168.64.3)
+  /srv/files/
+    export/               ← kalıcı depolama (NFS export, host seviyesinde rw)
+      personnel/ab/cd/abcd1234-....pdf
+      fleet/ab/cd/abcd1234-....jpg
+    staging/              ← geçici yazma alanı (Publisher kullanır)
+
+API sunucusu (192.168.64.5) — FileServiceApi container'ı
+  /app/storage/  → NFS mount, docker-compose'da **:ro** (salt-okunur)
+    export/      ← FileServiceApi SADECE buradan OKUR (indirme/stream/content)
+    staging/     ← FileServiceApi artık buraya YAZMIYOR
+
+FilesPublisher (Files-01'de, systemd servisi, kullanıcı: files-writer)
+  Python stdlib (http.server + ssl), mTLS zorunlu (CN=fileservice)
+  POST/DELETE /publish?relativePath=...  ← FileServiceApi'nin TEK yazma yolu
 ```
 
-Dosya adı formatı: `{domain}/{uuid[0:2]}/{uuid[2:4]}/{uuid}.{ext}`
+Dosya adı formatı: `{domain}/{uuid[0:2]}/{uuid[2:4]}/{uuid}.{ext}` (değişmedi).
 
-### 6.2 Upload Akışı (Atom)
+**Neden bu model?** FileServiceApi'nin kendi NFS mount'unu salt-okunur yapmak, container
+seviyesinde "bu servis yazamaz, sadece okur" garantisini sağlıyor — bir güvenlik açığı/RCE
+durumunda bile FileServiceApi üzerinden dosya sistemine yazma/silme mümkün olmuyor. Gerçek
+yazma yetkisi sadece `files-writer` kullanıcısıyla çalışan, ayrı, dar yetkili `FilesPublisher`
+servisinde.
+
+### 6.2 Upload Akışı (Publisher Modeli)
 
 ```
 1. Magic-byte kontrolü (ilk 12 byte okur, dosyayı ret etmeden önce kapat)
-2. File stream → staging/{relative_path}'e yaz
-3. Staging dosyasından SHA256 hesapla (disk write bütünlüğü de doğrulanır)
-4. File.Move(staging → export)   ← aynı dosya sistemi → atomic rename
-5. DB: files.objects + files.references INSERT
-   (DB fail → export'tan da sil = rollback)
-6. Audit: create/success
+2. FileServiceApi, dosyayı KENDİ container'ında geçici bir yerel dosyaya yazar (NFS değil)
+3. SHA256 hesaplanır (yerel diskten)
+4. FilesPublisherClient.cs → mTLS ile FilesPublisher'a POST /publish çağrısı
+   (relativePath + dosya içeriği gönderilir)
+5. FilesPublisher (Files-01, files-writer kullanıcısı):
+   a. staging'e yazar
+   b. aynı dosya sistemi içinde atomic rename → export'a taşır
+6. DB: files.objects + files.references INSERT
+   (DB fail → Publisher'a DELETE /publish çağrısıyla rollback)
+7. Audit: create/success
 ```
 
-Neden staging?
+Neden hâlâ staging (artık Publisher içinde)?
 - Eksik yükleme (network kesildi) asla export'a karışmaz
 - SHA256 tamamlanmış ve diske yazılmış byte'lardan hesaplanır
+- `ProtectSystem=strict` + tek `ReadWritePaths=/srv/files` (staging+export aynı üst dizin) —
+  ikisi ayrı `ReadWritePaths` girişi olsaydı systemd bunları ayrı bind-mount'lar yapardı,
+  `os.rename()` `EXDEV` hatasıyla başarısız olurdu (bu, gerçek test sırasında bulunan bir bug'dı).
 
-### 6.3 Download Akışı
+### 6.3 Download Akışı — İki Ayrı Yol
 
+Sistemde artık **iki farklı** indirme yolu var, farklı amaçlar için:
+
+**(A) Doğrudan stream (`/api/.../content`, uygulama içi görüntüleme/CV indirme için, cookie auth):**
 ```
 1. DB: fileId → objects tablosundan metadata çek
 2. If-None-Match == ETag ("sha256:<hash>") → 304 döndür (disk okuma yok)
@@ -373,9 +398,54 @@ Neden staging?
    → Range header varsa 206 Partial Content
    → yoksa 200 tam stream
 ```
+Bu yol, FileServiceApi'nin `:ro` NFS mount'undan okuyarak byte'ı **kendisi** stream eder.
 
-SHA256 **indirmede yeniden hesaplanmaz** — yükleme anında doğrulanmış ve DB'ye kaydedilmiştir.
-ETag = `"sha256:<hash>"` — içerik değişmediği sürece 304 ile cevap verilir, disk okunmaz.
+**(B) Ticket + X-Accel-Redirect (`/files/download/{ticket}`, "İndir" butonu için, cookie'siz):**
+```
+1. Client: POST /api/.../download-ticket (cookie auth) → opak, 256-bit ticket alır
+2. Client: GET /files/download/{ticket}  (Gateway'e, cookie'siz)
+3. Gateway → mTLS (CN=gateway) ile FileServiceApi'nin ticket-consume endpoint'ini çağırır
+4. FileServiceApi: ticket'ı DB'de atomik UPDATE ile doğrular/tüketir (bkz. 6.4 — Lease Modeli)
+   → geçerliyse X-Accel-Redirect: /protected-download/{relativePath} header'ı döner
+   → FileServiceApi byte'ı KENDİSİ OKUMAZ
+5. Gateway (nginx), X-Accel-Redirect'i görünce /protected-download/ (internal-only location)
+   üzerinden dosyayı KENDİ read-only bind-mount'undan (host'un mevcut NFS export'u) servis eder
+```
+Bu yolda FileServiceApi hiç byte görmez — sadece ticket'ı doğrulayıp yönlendirme header'ı döner;
+gerçek byte transferi tamamen Gateway'de olur. Detay: `proof/x-accel-redirect-gateway.md`.
+
+SHA256 **hiçbir indirme yolunda yeniden hesaplanmaz** — yükleme anında doğrulanmış ve DB'ye
+kaydedilmiştir. ETag = `"sha256:<hash>"` — (A) yolunda geçerli; (B) yolunda nginx kendi
+mtime+size tabanlı ETag'ini kullanır (bilinen, kozmetik bir fark — bkz. `proof/x-accel-redirect-gateway.md`).
+
+### 6.4 Ticket Lease Modeli (Süre + Sayı Sınırlı Çoklu Kullanım)
+
+`POST .../download-ticket` ile alınan ticket, S3 presigned URL benzeri bir "lease" modeliyle çalışır:
+
+```
+TicketLifetime   = 60 saniye   ← ilk kullanım penceresi (hiç kullanılmadıysa)
+LeaseDuration    = 30 saniye   ← ilk kullanımdan sonraki ek kullanım penceresi
+MaxUsesPerTicket = 20          ← toplam sert üst sınır
+
+Atomik SQL (tek UPDATE...RETURNING, Postgres row-level locking ile eşzamanlılık güvenli):
+  used_at IS NULL AND expires_at > now()                              → ilk kullanım, izin ver
+  used_at IS NOT NULL AND now() < used_at + lease_saniye               → lease içinde, izin ver
+  use_count >= MaxUsesPerTicket                                       → reddet (ticket_max_uses_reached)
+```
+
+Bu, çoklu Range isteği gerektiren büyük dosya/video senaryolarını (tarayıcının doğal parça parça
+okuma davranışı) tek bir HTTP isteğiyle sınırlı olmadan destekler. Tam kanıt (6 senaryo, 25
+eşzamanlı istek testi dahil): `proof/download-ticket-lease-model.md`.
+
+### 6.5 Gateway Seviyesi Koruma: Rate Limit + Log Maskeleme
+
+`/files/download/{ticket}` için:
+- **Rate limit**: IP başına `30r/s` + `burst=50`, aşılırsa `429`.
+- **Log maskeleme**: Ticket'ın sadece ilk 8 karakteri access log'a yazılır (`map`+özel `log_format`),
+  tam ticket hiçbir log dosyasında görünmez — hem başarılı (X-Accel) hem başarısız (404/429) yanıtlar
+  için, nginx'in `limit_req` modülünün kendi diagnostik `error_log`'u dahil.
+
+Tam kanıt: `proof/gateway-rate-limit-ve-ticket-log-maskeleme.md`.
 
 ---
 
@@ -390,6 +460,7 @@ platformdb
 │     ├── references       entity ↔ dosya bağlantıları
 │     ├── app_policies     hangi app hangi domain/tür'e erişebilir
 │     ├── relation_type_config  kardinalite (single/multi)
+│     ├── download_tickets  opak indirme ticket'ları (sadece hash, lease modeli — bkz. 6.4)
 │     └── audit_events     teknik audit (app bazlı)
 │
 ├── yonetim.*         ← YonetimApi'nin sahibi olduğu tablolar
@@ -413,7 +484,7 @@ extension     TEXT          -- "pdf"
 original_file_name TEXT     -- yükleyen kullanıcının dosya adı
 size_bytes    BIGINT
 sha256        TEXT          -- hex, upload anında hesaplanır
-classification TEXT         -- "internal" | "confidential" | "public"
+classification TEXT         -- "internal" | "confidential" | "restricted" | "official"
 status        TEXT          -- "active" | "archived" | "revoked" | "deleted"
 created_by_app  TEXT
 created_by_user TEXT
@@ -519,14 +590,21 @@ Her istek her iki tabloya da yazar — biri teknik, diğeri iş seviyesinde izle
 ```
 nginx location kuralları:
 
-/internal/            → 404  (FileServiceApi iç endpoint'leri asla dışarıya açılmaz)
-/api/auth/*           → yonetimapi:8080  (BFF login/refresh/logout)
-/api/personnel/*      → yonetimapi:8080
-/api/vehicles/*       → flotaapi:8080
-/health               → {"status":"healthy","service":"Gateway-Nginx"}
-/*                    → client:80  (React SPA — try_files ile SPA routing)
+/internal/                 → 404  (FileServiceApi iç endpoint'leri genel olarak dışarıya açılmaz —
+                                    TEK istisna aşağıda: /files/download/ üzerinden mTLS ile)
+/files/download/{ticket}   → FileServiceApi'ye mTLS (CN=gateway) ile, ticket tüketir,
+                              X-Accel-Redirect ile /protected-download/'a yönlendirir (bkz. 6.3-6.5)
+/protected-download/       → internal-only, sadece X-Accel-Redirect ile erişilebilir, dışarıdan
+                              doğrudan istek 404 döner
+/api/auth/*                → yonetimapi:8080  (BFF login/refresh/logout)
+/api/personnel/*           → yonetimapi:8080
+/api/vehicles/*            → flotaapi:8080
+/ops/*                     → opsapi:8080
+/health                    → {"status":"healthy","service":"Gateway-Nginx"}
+/*                         → client:80  (React SPA — try_files ile SPA routing)
 
 Hata yanıtları (JSON):
+429 too_many_requests     → /files/download/ rate limit aşıldıysa (bkz. 6.5)
 502 upstream_unavailable  → servis çöktüyse
 504 upstream_timeout      → 120 saniye içinde cevap gelmediyse
 
@@ -536,8 +614,11 @@ proxy_request_buffering off  → büyük dosyalar tampona alınmaz, stream edili
 proxy_buffering         off  → download da stream edilir
 ```
 
-nginx sadece yönlendirir. JWT'yi okumaz, doğrulamaz, değiştirmez.
-Tüm kimlik/yetki kararları YonetimApi ve FileServiceApi'de verilir.
+nginx, `/api/*`/`/ops/*` gibi normal proxy yollarında JWT'yi okumaz, doğrulamaz, değiştirmez —
+tüm kimlik/yetki kararları YonetimApi/FlotaApi/OpsApi ve FileServiceApi'de verilir. **Tek istisna**
+`/files/download/{ticket}` — burada nginx, FileServiceApi'yi CN=gateway mTLS sertifikasıyla doğrudan
+çağırır (JWT gerekmez, çünkü ticket'ın kendisi zaten RBAC'tan geçmiş, kısa ömürlü, lease modelli bir
+yetkidir). Diğer tüm `/internal/*` endpoint'ler (ticket oluşturma dahil) hâlâ hem mTLS hem JWT ister.
 
 ---
 
@@ -636,6 +717,13 @@ Content-Disposition: inline; filename*=UTF-8''profil-foto.jpg
 - `attachment`: tarayıcı dosyayı indirir
 - `inline`: tarayıcı dosyayı gösterir (resimler), kaydetmek istenince encode edilmiş isim kullanılır
 
+**⚠️ Önemli ayrım (2026-07-03):** `inline`/`attachment` seçimi **sadece doğrudan stream yolunda**
+(`/api/.../content`, bölüm 6.3 (A)) geçerlidir — bu, uygulama içi önizleme amaçlıdır. **Ticket tabanlı
+"İndir" akışında** (bölüm 6.3 (B), `/files/download/{ticket}`) disposition her zaman **koşulsuz
+`attachment`**'tır, dosya türünden bağımsız — çünkü bu akışın tek amacı indirmedir, önizleme değil.
+Bu ayrım, resim dosyalarının ticket ile indirilince tarayıcıda açılıp indirilmemesine neden olan gerçek
+bir prod bug'ının düzeltmesiyle netleşti (bkz. `proof/ticket-download-content-disposition-fix.md`).
+
 Neden RFC 5987? HTTP header'larına non-ASCII karakter (Türkçe ı, ş, ğ vb.) doğrudan yazılamaz.
 `Uri.EscapeDataString()` ile percent-encode edilen isim header'a güvenle girer.
 
@@ -677,5 +765,6 @@ const fileName = rfc5987Match ? decodeURIComponent(rfc5987Match[1]) : fallback
 | 503 | FileServiceApi | Disk/NFS erişilemiyor |
 | 502 | nginx | Upstream servis çökmüş |
 | 504 | nginx | Upstream 120 saniyede cevap vermedi |
-| 304 | FileServiceApi | ETag eşleşti, veri değişmemiş (cache) |
-| 206 | FileServiceApi | Range isteği, kısmi içerik |
+| 429 | nginx | `/files/download/` rate limit aşıldı (IP başına 30r/s, burst 50) |
+| 304 | FileServiceApi / nginx | ETag eşleşti, veri değişmemiş (cache) |
+| 206 | FileServiceApi / nginx | Range isteği, kısmi içerik |

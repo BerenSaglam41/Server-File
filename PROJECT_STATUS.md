@@ -2372,6 +2372,32 @@ Tam kanıt: `proof/ticket-download-content-disposition-fix.md`.
 
 ---
 
+## MIMARI.md Güncel Duruma Getirildi (TAMAMLANDI ✅ — 2026-07-03)
+
+Kullanıcı istekli, projedeki tüm `.md` dosyalarının güncelliği/tutarlılığı tarandı. `MIMARI.md` (ana
+mimari referans belgesi) ciddi şekilde eskimiş bulundu — "ticket" kelimesi hiç geçmiyordu, bölüm 6.1-6.3
+hâlâ FileServiceApi'nin NFS'e doğrudan yazdığı eski modeli anlatıyordu (Publisher rework'ten önce),
+"/internal/ her zaman 404" ifadesi artık tam doğru değildi (gateway CN istisnası var).
+
+**Güncellenen bölümler:**
+- Bölüm 1: ticket/X-Accel'in paralel bir yol olduğuna dair not eklendi.
+- Bölüm 6: 6.1-6.3 Publisher modeline göre yeniden yazıldı; yeni 6.4 (Lease Modeli) ve 6.5 (Rate
+  Limit + Log Maskeleme) alt bölümleri eklendi.
+- Bölüm 7.1: `download_tickets` tablosu şema haritasına eklendi.
+- Bölüm 7.2: `classification` değerleri düzeltildi (`internal/confidential/public` yanlıştı, gerçek
+  değer `internal/confidential/restricted/official` — bu, bu session'dan bağımsız, önceden var olan
+  bir hataydı).
+- Bölüm 10: Gateway location kuralları ticket/rate-limit ile güncellendi, "/internal/ her zaman 404"
+  ifadesi düzeltildi.
+- Bölüm 15: Content-Disposition'ın ticket akışında koşulsuz `attachment` olduğu netleştirildi.
+- Bölüm 17: `429` hata kodu eklendi.
+
+Diğer dosyalar: `PROJE/*.md` (06-30 tarihli) kasıtlı olarak dokunulmadı — bunlar orijinal planlama
+belgeleri, güncel-durum belgesi değil. `runbooks/production-hardening.md` zaten Publisher modelini
+doğru anlatıyordu, değişiklik gerekmedi.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
