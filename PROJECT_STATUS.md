@@ -2565,6 +2565,37 @@ kullanıcının hepsiyle gerçek test yapılıp sıfır mismatch kanıtlanacak.
 
 ---
 
+## Faz C1 — Yerel Yetkilendirme Modeli — Aşama 2: Shadow Mode (TAMAMLANDI ✅ — 2026-07-03)
+
+Karar hâlâ JWT'den veriliyor (davranış değişmedi) — DB-tabanlı (`yonetim.role_assignments`) sonuç
+paralel hesaplanıp karşılaştırılıyor, uyuşmazlık varsa `ROLE_SHADOW_MISMATCH` loglanıyor.
+`YonetimApi/Services/PermissionService.cs` güncellendi; `OpsApi`'nin statik `HasOpsRole`'u (senkron
+`RequireAssertion` async DB sorgusuna izin vermediği için) yeni bir `AuthorizationHandler<OpsRoleRequirement>`
+(`OpsApi/Infrastructure/OpsRoleAuthorizationHandler.cs`) pattern'ine taşındı, JWT mantığı birebir korundu.
+
+**Test 1 — 31 kullanıcının hepsiyle gerçek login (`tools/shadow-parity-test.sh`):** hr001/adm001
+(all-scope), m001-m003 (team-scope), p001-p024 (self-scope), opsadmin/opsuser01 — hem pozitif (kendi/
+ekip/herkes → 200) hem negatif (başkası/ekip dışı → 403) senaryolarla **60/60 OK**, sıfır HATA. (Test
+yazarken bulunan hata: `opsuser01` için yanlış varsayılan parola kullanılmıştı, `DEMO_HESAPLAR.md`
+kontrol edilip düzeltildi.)
+
+**Test 2 — sıfır mismatch:** `docker compose logs | grep -c ROLE_SHADOW_MISMATCH` → 0.
+
+**Test 3 — mekanizmanın gerçekten çalıştığının kanıtı (kullanıcı izniyle, kasıtlı bozulma):** "Sıfır
+mismatch"in "shadow kontrolü hiç çalışmıyor" anlamına gelmediğini kanıtlamak için P001'in DB rolü
+GEÇİCİ olarak revoke edildi (JWT'de hâlâ geçerli) — istek yine `200` döndü (davranış etkilenmedi) AMA
+log'da gerçek bir `ROLE_SHADOW_MISMATCH jwt=True db=False` satırı oluştu — mekanizma doğru çalışıyor.
+Rol hemen geri eklendi, tam test seti tekrar çalıştırılıp 60/60 temiz sonuç doğrulandı.
+
+Tam regresyon: smoke 23/23, safe-test-suite 36/36, backup/restore-test temiz. Tam kanıt:
+`proof/c1-asama2-shadow-mode.md`.
+
+**Sıradaki (kullanıcı onayı bekleyecek):** Aşama 3 — Cutover: `RoleSource` flag'i `Db`'ye çevrilir
+(önce YonetimApi, sonra ayrı test turuyla OpsApi). Keycloak realm rolleri SİLİNMEZ (rollback güvenliği).
+Aynı 60 senaryo tekrar çalıştırılıp sonuçların birebir aynı kaldığı doğrulanacak.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret

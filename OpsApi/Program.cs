@@ -44,11 +44,13 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
+builder.Services.AddScoped<IAuthorizationHandler, OpsRoleAuthorizationHandler>();
+
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("ops.read",    p => p.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.read", "ops.execute", "ops.admin")));
-    options.AddPolicy("ops.execute", p => p.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.execute", "ops.admin")));
-    options.AddPolicy("ops.admin",   p => p.RequireAssertion(ctx => HasOpsRole(ctx.User, "ops.admin")));
+    options.AddPolicy("ops.read",    p => p.AddRequirements(new OpsRoleRequirement("ops.read", "ops.execute", "ops.admin")));
+    options.AddPolicy("ops.execute", p => p.AddRequirements(new OpsRoleRequirement("ops.execute", "ops.admin")));
+    options.AddPolicy("ops.admin",   p => p.AddRequirements(new OpsRoleRequirement("ops.admin")));
 });
 
 // 403 → 404 dönüşümü: ops rolü olmayan authenticated kullanıcıya /ops/* URL varlığını gizle
@@ -99,21 +101,3 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "OpsA
 app.MapOpsEndpoints();
 
 app.Run();
-
-static bool HasOpsRole(System.Security.Claims.ClaimsPrincipal user, params string[] allowed)
-{
-    if (!user.Identity?.IsAuthenticated ?? true) return false;
-    var realmAccess = user.FindFirst("realm_access")?.Value;
-    if (realmAccess == null) return false;
-    try
-    {
-        using var doc = JsonDocument.Parse(realmAccess);
-        if (!doc.RootElement.TryGetProperty("roles", out var roles)) return false;
-        var roleSet = roles.EnumerateArray()
-            .Select(r => r.GetString())
-            .Where(r => r != null)
-            .ToHashSet()!;
-        return allowed.Any(a => roleSet.Contains(a));
-    }
-    catch { return false; }
-}
