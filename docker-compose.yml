@@ -3,6 +3,7 @@ services:
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: platformdb
       POSTGRES_USER: platform
@@ -21,6 +22,7 @@ services:
   # ── Keycloak ───────────────────────────────────────────────────────────────
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
     command: start-dev --import-realm
     environment:
       KEYCLOAK_ADMIN: admin
@@ -47,6 +49,7 @@ services:
   # UTM VM'lerinde çalışmak için gerekli, clamav/clamav sadece amd64 sağlıyor).
   clamav:
     image: clamav/clamav-debian:stable
+    restart: unless-stopped
     volumes:
       - clamav_data:/var/lib/clamav
     healthcheck:
@@ -63,6 +66,7 @@ services:
     build:
       context: ./FileServiceApi
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
@@ -93,6 +97,13 @@ services:
       - ./certs/ca.crt:/certs/ca.crt:ro
       - ./certs/fileservice-client.crt:/certs/fileservice-client.crt:ro
       - ./certs/fileservice-client.key:/certs/fileservice-client.key:ro
+    healthcheck:
+      # HTTPS+mTLS gerektirdiği için sadece TCP port kontrolü (Kestrel çöktüyse port hiç açık olmaz).
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,6 +119,7 @@ services:
     build:
       context: ./YonetimApi
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
@@ -126,9 +138,15 @@ services:
       - ./certs/yonetimapi.crt:/certs/yonetimapi.crt:ro
       - ./certs/yonetimapi.key:/certs/yonetimapi.key:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     depends_on:
       fileservice:
-        condition: service_started
+        condition: service_healthy
       keycloak:
         condition: service_healthy
     networks:
@@ -139,6 +157,7 @@ services:
     build:
       context: ./FlotaApi
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
@@ -156,9 +175,15 @@ services:
       - ./certs/filoapi.crt:/certs/filoapi.crt:ro
       - ./certs/filoapi.key:/certs/filoapi.key:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     depends_on:
       fileservice:
-        condition: service_started
+        condition: service_healthy
       keycloak:
         condition: service_healthy
     networks:
@@ -169,6 +194,7 @@ services:
     build:
       context: ./OpsApi
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       Keycloak__Authority: "http://localhost:8080/realms/platform"
@@ -185,6 +211,12 @@ services:
     volumes:
       - /backup/platform-files:/ops/status-files:ro
       - /var/log/platform-ops:/ops/audit
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     depends_on:
       postgres:
         condition: service_healthy
@@ -198,6 +230,13 @@ services:
     build:
       context: ./client
       dockerfile: Dockerfile
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     networks:
       - platform-net
 
@@ -206,6 +245,7 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
       - "5090:443"
     volumes:
@@ -218,12 +258,23 @@ services:
       # export dizininin aynısı — Gateway'e AYRI bir NFS bağlantısı açılmıyor,
       # api-server'ın mevcut (ro) mount'u container'a bind-mount ediliyor.
       - ${STORAGE_PATH:-/Volumes/platform-files}/export:/protected-files:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://127.0.0.1:443/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     depends_on:
-      - yonetimapi
-      - flotaapi
-      - opsapi
-      - fileservice
-      - client
+      yonetimapi:
+        condition: service_healthy
+      flotaapi:
+        condition: service_healthy
+      opsapi:
+        condition: service_healthy
+      fileservice:
+        condition: service_healthy
+      client:
+        condition: service_healthy
     networks:
       - platform-net
 

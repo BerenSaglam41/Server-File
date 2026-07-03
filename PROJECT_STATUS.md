@@ -2465,15 +2465,21 @@ PDF'i) kullanıcı onayıyla temizlendi.
   tek komuta indirilebilir.
 - **Resilience test V1**: Safe test geçiyor; sıradaki kontrollü testler Gateway/OpsApi/FileService/Keycloak/PostgreSQL
   restart sonrası health, login, download ve ops dashboard toparlanma kontrolleri.
-- **`docker-compose.yml`'de `restart:` politikası yok, ve VM'in bağımsız/beklenmedik reboot'ları
-  tekrarlanıyor (2026-07-03'te İKİNCİ kez gözlemlendi — ciddiyeti yükseltildi):** host reboot/crash
-  sonrası `postgres`/`keycloak` dışındaki hiçbir servis kendiliğinden ayağa kalkmıyor, elle
-  `docker compose up -d` gerekiyor. **Daha ciddisi:** bir reboot, git deposunda GERÇEK bir disk
-  bozulmasına (bir git object dosyasının yarım yazılıp bozulmasına) yol açtı — bkz. yukarıdaki
-  "Yan Olay: Git Deposu Bozulması" bölümü. Bu artık sadece "servisler kendiliğinden kalkmıyor" değil,
-  **VM'in neden bu kadar sık ve beklenmedik şekilde reboot olduğunun** (UTM/host seviyesi bir kararsızlık
-  mı, disk/güç sorunu mu) araştırılmasını gerektiren bir öncelik. `restart: unless-stopped` eklenmesi
-  BELİRTİYİ hafifletir ama KÖK NEDENİ çözmez.
+- **`restart: unless-stopped` + healthcheck eklendi (TAMAMLANDI ✅ — 2026-07-03)**: VM'in tekrarlayan,
+  beklenmedik reboot'larının kök nedeni araştırıldı — `journalctl --list-boots` (VM boot geçmişi) ile
+  Mac'in kendi `pmset -g log`'u (güç olayları) karşılaştırıldı, reboot aralıklarının **`'Clamshell
+  Sleep'`** olaylarıyla birebir örtüştüğü bulundu: host Mac'in kapağı kapanınca uykuya geçiyor, içinde
+  çalışan UTM VM'i düzgün kapanma sinyali almadan aniden donuyor. Bu, en az bir kez git deposunda gerçek
+  bir disk bozulmasına yol açmıştı (bkz. yukarıdaki "Yan Olay" bölümü). Kullanıcı, kök nedeni (Mac'i hiç
+  uyutmama) pil/ısınma bedeli nedeniyle düzeltmemeyi, sadece belirti düzeyinde önlem almayı tercih etti:
+  tüm 9 servise `restart: unless-stopped` + (6 servise yeni) healthcheck eklendi. **Bulunan bug:**
+  `CMD-SHELL` `/bin/sh` kullanıyor, ama `/dev/tcp/` özelliği sadece bash'e özgü — `.NET aspnet` imajının
+  `/bin/sh`'i (dash) bunu desteklemiyordu, `test: ["CMD","bash","-c",...]` ile düzeltildi. **Gerçek
+  senaryo testi:** `docker kill` yanlış test yöntemi olduğu bulundu (Docker bunu "kasıtlı durdurma"
+  sayıyor) — doğru test `sudo systemctl restart docker` (Docker daemon'ın kendisini yeniden başlatmak,
+  VM reboot'unu doğru simüle eder): **tüm 9 servis hiçbir manuel müdahale olmadan otomatik "healthy"
+  durumuna geldi.** Tam kanıt: `proof/restart-policy-ve-healthcheck.md`. Kök neden (host uyku davranışı)
+  bilinçli olarak düzeltilmedi.
 - **Ops Dashboard V1 polish**: Read-only console artık `/ops/dashboard` üzerinden System Health, Services,
   Disk, Alerts, Backups ve Version metadata alır. Docker socket OpsApi'ye mount edilmez; servis listesi
   `tools/services-status.sh` tarafından yazılan status-file üzerinden okunur. Kalan polish: UI metriklerinin
