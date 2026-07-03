@@ -2539,6 +2539,32 @@ UI/iş akışı public dosya oluşturmayı tetiklemiyor (sadece altyapı/API sev
 
 ---
 
+## Faz C1 — Yerel Yetkilendirme Modeli — Aşama 1: Şema + Backfill (TAMAMLANDI ✅ — 2026-07-03)
+
+Rehber bölüm 6.2: "Keycloak realm/client role'leri nihai uygulama yetki kaynağı değildir." Kullanıcı
+onayıyla C1'e (yetki kaynağını Keycloak'tan kendi DB'mize taşıma) başlandı — **kademeli, her adımda
+gerçek testlerle doğrulanan** bir göç, tek seferlik cutover yok (kullanıcının açık isteği). Bu Aşama 1
+SADECE şema + backfill — `PermissionService.cs`/`OpsApi` koduna HİÇ dokunulmadı, davranış değişmedi.
+
+`yonetim.role_assignments` tablosu eklendi, Keycloak realm export'undaki (`keycloak/realm-platform.json`)
+32 kullanıcının mevcut rol atamaları bire bir bu tabloya kopyalandı (34 atama: 24 self, 3 team, 2
+read.all+2 write.all, 2 ops.read+1 ops.admin).
+
+**Bulunan bug:** İlk şema tasarımında sıradan `UNIQUE(principal_id, permission, action, scope)`
+kullanılmıştı — canlı idempotency testinde (backfill script'i ikinci kez çalıştırılınca) beklenen 34
+yerine 37 satır çıktı. Kök neden: SQL'de `NULL != NULL`, `scope IS NULL` olan ops rolleri için `ON
+CONFLICT` hiç tetiklenmiyordu. `COALESCE(scope,'')` expression index'i ile düzeltildi, backfill 3 kez
+üst üste çalıştırılıp her seferinde tam 34 satır (sıfır mükerrer) doğrulandı.
+
+**Test:** `server-smoke-test.sh` 23/23, `server-safe-test-suite.sh` 36/36 — şema+backfill öncesiyle
+birebir aynı (davranış değişmediği kanıtlandı, varsayılmadı). Tam kanıt: `proof/c1-asama1-sema-backfill.md`.
+
+**Sıradaki (kullanıcı onayı bekleyecek):** Aşama 2 — Shadow Mode: `DbRoleSource` eklenip JWT-tabanlı ve
+DB-tabanlı sonuç paralel hesaplanacak, karar hâlâ JWT'den verilecek, uyuşmazlıklar loglanacak. 32
+kullanıcının hepsiyle gerçek test yapılıp sıfır mismatch kanıtlanacak.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret
