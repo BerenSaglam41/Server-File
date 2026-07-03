@@ -2452,6 +2452,29 @@ PDF'i) kullanıcı onayıyla temizlendi.
 
 ---
 
+## `restart: unless-stopped` + Healthcheck — VM Reboot Sonrası Otomatik Toparlanma (TAMAMLANDI ✅ — 2026-07-03)
+
+VM'in tekrarlayan, beklenmedik reboot'larının kök nedeni araştırıldı — `journalctl --list-boots` (VM boot
+geçmişi) ile Mac'in kendi `pmset -g log`'u (güç olayları) karşılaştırıldı, reboot aralıklarının
+**`'Clamshell Sleep'`** olaylarıyla birebir örtüştüğü bulundu: host Mac'in kapağı kapanınca uykuya
+geçiyor, içinde çalışan UTM VM'i düzgün kapanma sinyali almadan aniden donuyor. Bu, en az bir kez git
+deposunda gerçek bir disk bozulmasına yol açmıştı (bkz. yukarıdaki "Yan Olay" bölümü). Kullanıcı, kök
+nedeni (Mac'i hiç uyutmama) pil/ısınma bedeli nedeniyle düzeltmemeyi, sadece belirti düzeyinde önlem
+almayı tercih etti: tüm 9 servise `restart: unless-stopped` + (6 servise yeni) healthcheck eklendi.
+
+**Bulunan bug:** `CMD-SHELL` `/bin/sh` kullanıyor, ama `/dev/tcp/` özelliği sadece bash'e özgü — `.NET
+aspnet` imajının `/bin/sh`'i (dash) bunu desteklemiyordu, `test: ["CMD","bash","-c",...]` ile düzeltildi.
+
+**Gerçek senaryo testi:** `docker kill` yanlış test yöntemi olduğu bulundu (Docker bunu "kasıtlı
+durdurma" sayıyor) — doğru test `sudo systemctl restart docker` (Docker daemon'ın kendisini yeniden
+başlatmak, VM reboot'unu doğru simüle eder): **tüm 9 servis hiçbir manuel müdahale olmadan otomatik
+"healthy" durumuna geldi.**
+
+Tam kanıt: `proof/restart-policy-ve-healthcheck.md`. Kök neden (host uyku davranışı) bilinçli olarak
+düzeltilmedi.
+
+---
+
 ## Platform Mimarisi Rehberi Hizalaması — Faz B1 (TAMAMLANDI ✅ — 2026-07-03)
 
 `POST /internal/references/{referenceId}/archive` eklendi — rehber bölüm 9.2/9.9'un hedef modeli. Eski
@@ -2476,9 +2499,11 @@ sonrasında temizlendi. Tam regresyon (smoke 23/23, safe-test-suite 36/36) temiz
 
 Tam kanıt: `proof/b1-referans-bazli-archive.md`.
 
-**Sıradaki:** Faz B2 (YAGNI kararları — `app_clients`, `storage_backend_id`/`zone`, public/private zone
-— kullanıcı onayı bekliyor), Faz C (yerel yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım
-konuşması gerektirir).
+**Sıradaki (2026-07-03 sonrası güncellendi):** Public/private zone kullanıcı kararıyla **B3 olarak
+tamamlandı** (bkz. aşağıdaki bölüm) — aşağıdaki not artık geçersiz. Kalan YAGNI kararları: `app_clients`
+tablosu, `storage_backend_id`/`storage_key_version` kolonları (hâlâ tek storage backend olduğu için
+ertelendi). Faz C (yerel yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım konuşması
+gerektirir) henüz başlanmadı.
 
 ---
 
@@ -2527,21 +2552,6 @@ UI/iş akışı public dosya oluşturmayı tetiklemiyor (sadece altyapı/API sev
   tek komuta indirilebilir.
 - **Resilience test V1**: Safe test geçiyor; sıradaki kontrollü testler Gateway/OpsApi/FileService/Keycloak/PostgreSQL
   restart sonrası health, login, download ve ops dashboard toparlanma kontrolleri.
-- **`restart: unless-stopped` + healthcheck eklendi (TAMAMLANDI ✅ — 2026-07-03)**: VM'in tekrarlayan,
-  beklenmedik reboot'larının kök nedeni araştırıldı — `journalctl --list-boots` (VM boot geçmişi) ile
-  Mac'in kendi `pmset -g log`'u (güç olayları) karşılaştırıldı, reboot aralıklarının **`'Clamshell
-  Sleep'`** olaylarıyla birebir örtüştüğü bulundu: host Mac'in kapağı kapanınca uykuya geçiyor, içinde
-  çalışan UTM VM'i düzgün kapanma sinyali almadan aniden donuyor. Bu, en az bir kez git deposunda gerçek
-  bir disk bozulmasına yol açmıştı (bkz. yukarıdaki "Yan Olay" bölümü). Kullanıcı, kök nedeni (Mac'i hiç
-  uyutmama) pil/ısınma bedeli nedeniyle düzeltmemeyi, sadece belirti düzeyinde önlem almayı tercih etti:
-  tüm 9 servise `restart: unless-stopped` + (6 servise yeni) healthcheck eklendi. **Bulunan bug:**
-  `CMD-SHELL` `/bin/sh` kullanıyor, ama `/dev/tcp/` özelliği sadece bash'e özgü — `.NET aspnet` imajının
-  `/bin/sh`'i (dash) bunu desteklemiyordu, `test: ["CMD","bash","-c",...]` ile düzeltildi. **Gerçek
-  senaryo testi:** `docker kill` yanlış test yöntemi olduğu bulundu (Docker bunu "kasıtlı durdurma"
-  sayıyor) — doğru test `sudo systemctl restart docker` (Docker daemon'ın kendisini yeniden başlatmak,
-  VM reboot'unu doğru simüle eder): **tüm 9 servis hiçbir manuel müdahale olmadan otomatik "healthy"
-  durumuna geldi.** Tam kanıt: `proof/restart-policy-ve-healthcheck.md`. Kök neden (host uyku davranışı)
-  bilinçli olarak düzeltilmedi.
 - **Ops Dashboard V1 polish**: Read-only console artık `/ops/dashboard` üzerinden System Health, Services,
   Disk, Alerts, Backups ve Version metadata alır. Docker socket OpsApi'ye mount edilmez; servis listesi
   `tools/services-status.sh` tarafından yazılan status-file üzerinden okunur. Kalan polish: UI metriklerinin
