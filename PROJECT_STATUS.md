@@ -2426,6 +2426,30 @@ Tam kanıt: `proof/faz-a-guvenlik-sertlestirme.md`.
 `storage_backend_id`/`zone` kolonları, public/private zone kullanıcı onayı bekliyor), Faz C (yerel
 yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım konuşması gerektirir, henüz başlanmadı).
 
+### Yan Olay: Git Deposu Bozulması ve Kurtarma (2026-07-03)
+
+Faz A deploy'u sırasında sunucuda `git pull` "loose object is corrupt" hatasıyla başarısız oldu — bir
+commit object'i (`af989a6a...`, MIMARI.md güncellemesi) diskte bozulmuştu, muhtemelen tekrarlayan VM
+reboot'larından birinin (bkz. "restart: politikası yok" bulgusu) tam o dosya yazılırken gerçekleşmesi
+nedeniyle. **Kritik doğrulama:** Postgres verisi (personel/dosya kataloğu) tamamen sağlam çıktı, kernel
+loglarında disk hatası yoktu — bozulma sadece git'in loose object dosyasıyla sınırlıydı.
+
+**Kurtarma:** Sunucudaki `.git` yedeklendi (silinmeden), GitHub'dan temiz bir `.git` fetch edilip yerine
+kondu (working tree dosyalarına dokunulmadı). Bu, host'taki bazı kaynak dosyaların (FileEndpoints.cs,
+Program.cs, MIMARI.md, PROJECT_STATUS.md, docker-compose.yml, proof dosyası) commit'teki güncel halin
+GERİSİNDE kaldığını ortaya çıkardı — **ama çalışan Docker container'ın doğru, test edilmiş kodu
+çalıştırmaya devam ettiği canlı bir cross-app testiyle doğrulandı** (imaj zaten build edilmişti, host
+dosya sistemi olayından etkilenmedi). Kod/doküman dosyaları `git checkout` ile düzeltildi.
+
+**Ek bulgu:** Sertifikalar (`ca.crt` ve diğerleri) git'teki halden gerçekten farklıydı (farklı CA serial
+numarası) — sunucunun kendi CA'sı hiç tam olarak git'e senkronize edilmemiş. Bu oturumun kuralına göre
+(sunucu-üretilen sertifikalar her zaman doğru kabul edilir) çalışan sertifikalar locale geri çekilip
+commit edildi, git'ten sunucuya asla üzerine yazılmadı.
+
+Sonuç: üç taraf (local/origin/server) tekrar tam senkron, `git rev-parse HEAD` birebir aynı, tam smoke
+test 23/23. Eski/gereksiz artifact'lar (git yedeği, önceki oturumdan kalma sertifika yedekleri, bir test
+PDF'i) kullanıcı onayıyla temizlendi.
+
 ---
 
 ## SIRADAKİ ADIM
@@ -2441,9 +2465,15 @@ yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım konuşması ge
   tek komuta indirilebilir.
 - **Resilience test V1**: Safe test geçiyor; sıradaki kontrollü testler Gateway/OpsApi/FileService/Keycloak/PostgreSQL
   restart sonrası health, login, download ve ops dashboard toparlanma kontrolleri.
-- **`docker-compose.yml`'de `restart:` politikası yok** (2026-07-03'te bir VM reboot sırasında fark edildi):
-  host reboot/crash sonrası `postgres`/`keycloak` dışındaki hiçbir servis kendiliğinden ayağa kalkmıyor,
-  elle `docker compose up -d` gerekiyor. `restart: unless-stopped` eklenmesi düşünülebilir.
+- **`docker-compose.yml`'de `restart:` politikası yok, ve VM'in bağımsız/beklenmedik reboot'ları
+  tekrarlanıyor (2026-07-03'te İKİNCİ kez gözlemlendi — ciddiyeti yükseltildi):** host reboot/crash
+  sonrası `postgres`/`keycloak` dışındaki hiçbir servis kendiliğinden ayağa kalkmıyor, elle
+  `docker compose up -d` gerekiyor. **Daha ciddisi:** bir reboot, git deposunda GERÇEK bir disk
+  bozulmasına (bir git object dosyasının yarım yazılıp bozulmasına) yol açtı — bkz. yukarıdaki
+  "Yan Olay: Git Deposu Bozulması" bölümü. Bu artık sadece "servisler kendiliğinden kalkmıyor" değil,
+  **VM'in neden bu kadar sık ve beklenmedik şekilde reboot olduğunun** (UTM/host seviyesi bir kararsızlık
+  mı, disk/güç sorunu mu) araştırılmasını gerektiren bir öncelik. `restart: unless-stopped` eklenmesi
+  BELİRTİYİ hafifletir ama KÖK NEDENİ çözmez.
 - **Ops Dashboard V1 polish**: Read-only console artık `/ops/dashboard` üzerinden System Health, Services,
   Disk, Alerts, Backups ve Version metadata alır. Docker socket OpsApi'ye mount edilmez; servis listesi
   `tools/services-status.sh` tarafından yazılan status-file üzerinden okunur. Kalan polish: UI metriklerinin
