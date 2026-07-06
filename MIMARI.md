@@ -209,9 +209,12 @@ user JWT alındı
       │
       ▼
 [2] RBAC: IPermissionService.CanReadAsync(user, targetPersonnelId)
-    ┌─ roles.Contains("personnel.files.read.all")   → tüm personele erişir
-    ├─ roles.Contains("personnel.files.read.team")  → DB'de ekibindeki personele erişir
-    └─ roles.Contains("personnel.files.read.self")  → yalnız kendi ID'sine erişir
+    → KARAR ARTIK yonetim.role_assignments PostgreSQL tablosundan verilir (Faz C1 cutover,
+      2026-07-06). Keycloak JWT'nin "roles" claim'i yalnız kimlik doğrulama sonrası kullanıcıyı
+      (personnel_id) belirlemek için okunur — yetki KARARI için değil. Bkz. bölüm 4.
+    ┌─ role_assignments'ta {permission}.read.all aktifse   → tüm personele erişir
+    ├─ role_assignments'ta {permission}.read.team aktifse  → DB'de (team_members) ekibindeki personele erişir
+    └─ role_assignments'ta {permission}.read.self aktifse  → yalnız kendi ID'sine erişir
     → izin yoksa 403
       │
       ▼
@@ -256,29 +259,55 @@ service JWT + mTLS cert alındı
 
 ## 4. RBAC Modeli
 
+**Önemli mimari değişiklik (Faz C1, 2026-07-03 — 2026-07-06):** Yetki kararının kaynağı Keycloak
+realm role'lerinden `yonetim.role_assignments` PostgreSQL tablosuna taşındı. Keycloak artık **sadece
+kimlik doğrular** ("bu kişi kim?", `personnel_id`/`sub` claim'i JWT'ye hâlâ Keycloak'tan gelir);
+**"bu kişi ne yapabilir?"** sorusunun cevabı DB'den gelir. Bu, kademeli, 4 aşamalı bir göçle yapıldı
+(şema+backfill → shadow mode → cutover → yönetim scripti) — detaylı gerekçe ve test kanıtları
+`PROJECT_STATUS.md`'nin "Faz C1" bölümlerinde ve `proof/c1-*.md` dosyalarında. Keycloak realm
+rolleri/atamaları **silinmedi** (rollback güvenliği, `Authorization__RoleSource` env var'ı ile anında
+`Jwt`/`Shadow`/`Db` arasında geçiş yapılabilir) ama artık yetki kararı için OKUNMUYOR.
+
 ### 4.1 Rol Yapısı
 
-Her Keycloak rolü üç boyutu tek isimde taşır:
+Her rol üç boyutu tek isimde taşır (`{permission}.{action}.{scope}` formatı — bu format hem eski
+Keycloak realm role adlarında hem yeni DB satırlarında aynı kaldı, sadece SAKLANDIĞI yer değişti):
 
 ```
-{kaynak}.{eylem}.{kapsam}
-
 personnel.files.read.self   → yalnız kendi personnel kaydını okur
 personnel.files.read.team   → kendi + DB'deki ekibini okur
 personnel.files.read.all    → tüm personeli okur
 personnel.files.write.self  → kendi dosyasını yükler/arşivler
 personnel.files.write.all   → herkese dosya yükler/arşivler
+ops.read / ops.execute / ops.admin  → OpsApi rolleri (scope yok, NULL)
 ```
+
+`yonetim.role_assignments` şeması:
+```sql
+role_assignments(id, principal_id, permission, action, scope, granted_by, granted_at, revoked_at)
+-- principal_id: personnel_id (P001, HR001, OPSADMIN, ...) — GetPersonnelId ile aynı normalize kuralı
+-- scope NULL olabilir (ops.* rolleri) — UNIQUE INDEX bunu COALESCE(scope,'') ile ele alır
+-- revoked_at NULL ise rol aktif, dolu ise iptal edilmiş (satır silinmez, iz kalır)
+```
+
+`YonetimApi/Services/PermissionService.cs` (`HasPermissionViaDbAsync`) ve
+`OpsApi/Infrastructure/OpsRoleAuthorizationHandler.cs`, all→team→self önceliğiyle bu tabloyu sorgular.
+Rol atamak/kaldırmak için Keycloak admin paneli DEĞİL, `tools/manage-role-assignment.sh` kullanılır:
+```bash
+bash tools/manage-role-assignment.sh grant  P022 personnel.files read all
+bash tools/manage-role-assignment.sh revoke P022 personnel.files read all
+bash tools/manage-role-assignment.sh list   P022
+```
+Bu değişiklik anında etkilidir — kullanıcının yeniden login olmasına veya Keycloak realm JSON'unun
+güncellenip yeniden import edilmesine gerek yoktur (kanıt: `proof/c1-asama4-rol-yonetim-scripti.md`).
 
 ### 4.2 Kapsam Belirleme
 
 ```
-read.all  → SELECT * FROM personnel WHERE name ILIKE $1
-read.team → SELECT * WHERE personnel_id IN (
-              SELECT personnel_id FROM team_members WHERE manager_id = $ownId
-              UNION SELECT $ownId
-            )
-read.self → SELECT * WHERE personnel_id = $ownId
+read.all  → role_assignments'ta {permission}.read.all aktif → herkese erişir
+read.team → role_assignments'ta {permission}.read.team aktif VE
+              (ownId == targetId OR EXISTS (SELECT 1 FROM team_members WHERE manager_id=$ownId AND personnel_id=$targetId))
+read.self → role_assignments'ta {permission}.read.self aktif VE ownId == targetId
 ```
 
 ### 4.3 Test Kullanıcıları
@@ -337,15 +366,18 @@ servisine devredildi. Ayrıntılı kanıt: `proof/nfs-rw-to-publisher-model.md`.
 ```
 Files-01 (192.168.64.3)
   /srv/files/
-    export/               ← kalıcı depolama (NFS export, host seviyesinde rw)
+    export/               ← kalıcı PRIVATE depolama (NFS export, host seviyesinde rw)
       personnel/ab/cd/abcd1234-....pdf
       fleet/ab/cd/abcd1234-....jpg
-    staging/              ← geçici yazma alanı (Publisher kullanır)
+    export-public/        ← kalıcı PUBLIC depolama (Faz B3, 2026-07-03) — export/'ten TAMAMEN
+                             ayrı fiziksel kök dizin (savunma derinliği), aynı shard şeması
+    staging/              ← geçici yazma alanı (Publisher kullanır, hem public hem private için ortak)
 
 API sunucusu (192.168.64.5) — FileServiceApi container'ı
   /app/storage/  → NFS mount, docker-compose'da **:ro** (salt-okunur)
-    export/      ← FileServiceApi SADECE buradan OKUR (indirme/stream/content)
-    staging/     ← FileServiceApi artık buraya YAZMIYOR
+    export/        ← FileServiceApi SADECE buradan OKUR (indirme/stream/content)
+    export-public/ ← Gateway'in AYRI, kimlik-doğrulamasız salt-okunur mount'u (bkz. 6.6)
+    staging/       ← FileServiceApi artık buraya YAZMIYOR
 
 FilesPublisher (Files-01'de, systemd servisi, kullanıcı: files-writer)
   Python stdlib (http.server + ssl), mTLS zorunlu (CN=fileservice)
@@ -364,16 +396,21 @@ servisinde.
 
 ```
 1. Magic-byte kontrolü (ilk 12 byte okur, dosyayı ret etmeden önce kapat)
-2. FileServiceApi, dosyayı KENDİ container'ında geçici bir yerel dosyaya yazar (NFS değil)
-3. SHA256 hesaplanır (yerel diskten)
-4. FilesPublisherClient.cs → mTLS ile FilesPublisher'a POST /publish çağrısı
-   (relativePath + dosya içeriği gönderilir)
-5. FilesPublisher (Files-01, files-writer kullanıcısı):
+2. Fail-closed virüs taraması (Faz A1, 2026-07-03): IVirusScanService, ClamAV'e (clamd raw
+   INSTREAM protokolü, TCP) dosyayı gönderir.
+   → Infected  → 422 virus_detected, dosya YAYINLANMAZ
+   → Unavailable (clamd'e ulaşılamıyor) → 503 scan_unavailable — "muhtemelen temizdir"
+     VARSAYILMAZ, fail-closed. Kanıt: proof/faz-a-guvenlik-sertlestirme.md.
+3. FileServiceApi, dosyayı KENDİ container'ında geçici bir yerel dosyaya yazar (NFS değil)
+4. SHA256 hesaplanır (yerel diskten)
+5. FilesPublisherClient.cs → mTLS ile FilesPublisher'a POST /publish?...&zone=public|private çağrısı
+   (relativePath + dosya içeriği + zone gönderilir — bkz. 6.6, varsayılan zone=private)
+6. FilesPublisher (Files-01, files-writer kullanıcısı):
    a. staging'e yazar
-   b. aynı dosya sistemi içinde atomic rename → export'a taşır
-6. DB: files.objects + files.references INSERT
+   b. aynı dosya sistemi içinde atomic rename → export/ veya export-public/'e taşır (zone'a göre)
+7. DB: files.objects (storage_zone dahil) + files.references INSERT
    (DB fail → Publisher'a DELETE /publish çağrısıyla rollback)
-7. Audit: create/success
+8. Audit: create/success
 ```
 
 Neden hâlâ staging (artık Publisher içinde)?
@@ -447,6 +484,28 @@ eşzamanlı istek testi dahil): `proof/download-ticket-lease-model.md`.
 
 Tam kanıt: `proof/gateway-rate-limit-ve-ticket-log-maskeleme.md`.
 
+### 6.6 Public/Private Storage Zone (Faz B3, 2026-07-03)
+
+Bazı dosyalar (yalnız `classification=official` olanlar) kimlik doğrulaması OLMADAN erişilebilir
+şekilde yayınlanabilir — bu, `files.objects.storage_zone` (`public`/`private`, varsayılan `private`)
+kolonuyla kontrol edilir:
+
+```
+POST /internal/files  (zone=public form alanı, classification=official ZORUNLU eşleşme)
+  → zone=public + classification != official  → 400 zone_classification_mismatch
+  → geçerliyse: FilesPublisher'a zone=public parametresiyle yayınlanır (export-public/'e yazılır)
+  → yanıt: { ..., zone: "public", publicUrl: "/public/{relativePath}" }
+
+GET /public/{relativePath}  (Gateway, HİÇBİR kimlik doğrulaması yok — ticket/JWT/mTLS gerekmez)
+  → nginx, export-public/'in salt-okunur mount'undan DOĞRUDAN servis eder
+  → FileServiceApi ve ticket store bu okuma yolunda HİÇ yer almaz (rehberin açık isteği)
+```
+
+Private dosyalar `export-public/` dizininde FİZİKSEL OLARAK hiç bulunmadığı için `/public/` yolundan
+asla erişilemez (savunma derinliği — path-traversal hatası bile iki ağacı karıştıramaz). Fail-closed
+validasyon zinciri (magic-byte, ClamAV — bkz. 6.2) zone'dan bağımsız aynen uygulanır. Tam kanıt:
+`proof/b3-public-private-zone.md`.
+
 ---
 
 ## 7. Veritabanı Yapısı
@@ -466,6 +525,7 @@ platformdb
 ├── yonetim.*         ← YonetimApi'nin sahibi olduğu tablolar
 │     ├── personnel        personel listesi (ad, departman, unvan)
 │     ├── team_members     yönetici-ekip ilişkisi (RBAC.team için)
+│     ├── role_assignments yetki kaynağı (Faz C1, 2026-07-06) — bkz. bölüm 4
 │     └── audit_events     domain audit (kullanıcı bazlı)
 │
 └── filo.*            ← FlotaApi'nin sahibi olduğu tablolar
@@ -485,6 +545,7 @@ original_file_name TEXT     -- yükleyen kullanıcının dosya adı
 size_bytes    BIGINT
 sha256        TEXT          -- hex, upload anında hesaplanır
 classification TEXT         -- "internal" | "confidential" | "restricted" | "official"
+storage_zone  TEXT          -- "public" | "private" (varsayılan "private") — bkz. bölüm 6.6
 status        TEXT          -- "active" | "archived" | "revoked" | "deleted"
 created_by_app  TEXT
 created_by_user TEXT
@@ -504,6 +565,21 @@ is_primary    BOOLEAN       -- single-primary sisteminde aktif olan
 status        TEXT          -- "active" | "revoked"
 created_at    TIMESTAMPTZ
 ```
+
+**Referans-bazlı archive modeli (Faz B1, 2026-07-03):** Archive işlemi artık **dosya** (`fileId`)
+seviyesinde değil, **referans** (`referenceId`) seviyesinde yapılır:
+```
+POST /internal/references/{referenceId}/archive
+  1. Sahiplik kontrolü: reference.AppCode == callerAppCode (değilse no-leak 404)
+  2. Bu referansı revoked yap
+  3. Aynı file_id'ye ait BAŞKA aktif referans var mı kontrol et
+     → yoksa: files.objects.status = archived (cascade)
+     → varsa: obje active kalır (başka bir app/entity hâlâ bu dosyayı kullanıyor)
+```
+Bu, bir dosyanın birden fazla uygulama/varlık tarafından referanslanabildiği (`files.references`
+şemasının zaten desteklediği ama eskiden kullanılmayan) senaryoda doğru davranışı sağlar — eski
+`POST /internal/files/{fileId}/archive` (doğrudan obje arşivleme) tamamen kaldırıldı. Tam kanıt
+(cascade davranışı gerçek DB testiyle doğrulandı): `proof/b1-referans-bazli-archive.md`.
 
 ### 7.4 files.app_policies
 
@@ -739,13 +815,15 @@ const fileName = rfc5987Match ? decodeURIComponent(rfc5987Match[1]) : fallback
 
 | Katman | Sorumluluk | Sorumluluk dışı |
 |--------|-----------|-----------------|
-| **nginx** | Yönlendirme, boyut limiti, JSON hata yanıtları | Token doğrulama, iş mantığı |
-| **YonetimApi** | User JWT doğrulama, RBAC, domain audit, FileService proxy | Dosya depolama, fiziksel path |
+| **nginx (Gateway)** | Yönlendirme, boyut limiti, JSON hata yanıtları, rate limit, ticket X-Accel servis, public zone servisi | Token doğrulama, iş mantığı |
+| **YonetimApi** | User JWT doğrulama, RBAC kararı (DB'den, bkz. bölüm 4), domain audit, FileService proxy | Dosya depolama, fiziksel path |
 | **FlotaApi** | Aynı (fleet domain için) | — |
-| **FileServiceApi** | Dosya katalog yönetimi, depolama, stream, teknik audit | Kullanıcı kimliği, RBAC |
-| **PostgreSQL** | Veri kalıcılığı | — |
-| **Files-01 (NFS)** | Binary depolama | Metadata, erişim kontrolü |
-| **Keycloak** | Token imzalama, kullanıcı yönetimi | Uygulama iş mantığı |
+| **FileServiceApi** | Dosya katalog/metadata yönetimi, virüs tarama tetikleme, stream, teknik audit | Kullanıcı kimliği, RBAC kararı, fiziksel yazma (artık FilesPublisher'da) |
+| **ClamAV** | Fail-closed virüs taraması (bkz. 6.2) | Dosya katalog/metadata |
+| **FilesPublisher (Files-01)** | Tek fiziksel yazma noktası (mTLS korumalı) | Yetki/politika kararı |
+| **PostgreSQL** | Veri kalıcılığı, yetki kaynağı (`yonetim.role_assignments`) | — |
+| **Files-01 (NFS)** | Binary depolama (private + public) | Metadata, erişim kontrolü |
+| **Keycloak** | Kimlik doğrulama (token imzalama, kullanıcı yönetimi) — yetki kararı DEĞİL | Uygulama iş mantığı, "ne yapabilir" kararı |
 
 ---
 
@@ -761,8 +839,11 @@ const fileName = rfc5987Match ? decodeURIComponent(rfc5987Match[1]) : fallback
 | 409 | FileServiceApi | (eski) hash uyuşmazlığı — kaldırıldı |
 | 413 | FileServiceApi | Dosya policy limitini aşıyor |
 | 415 | FileServiceApi | Uzantı/magic-byte uyuşmazlığı |
+| 400 `zone_classification_mismatch` | FileServiceApi | `zone=public` ama `classification != official` (bkz. 6.6) |
+| 422 `virus_detected` | FileServiceApi | ClamAV taraması dosyayı reddetti (bkz. 6.2) |
 | 500 | Herhangi | Yakalanmamış hata |
 | 503 | FileServiceApi | Disk/NFS erişilemiyor |
+| 503 `scan_unavailable` | FileServiceApi | ClamAV'e ulaşılamadı — fail-closed, dosya yayınlanmadı |
 | 502 | nginx | Upstream servis çökmüş |
 | 504 | nginx | Upstream 120 saniyede cevap vermedi |
 | 429 | nginx | `/files/download/` rate limit aşıldı (IP başına 30r/s, burst 50) |

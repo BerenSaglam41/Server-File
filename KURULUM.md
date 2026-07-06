@@ -526,13 +526,15 @@ Detaylı plan: `runbooks/production-hardening.md`
 
 | Container | Port | Görev |
 |---|---|---|
-| gateway (nginx) | 5090 | Tek giriş noktası — React SPA + API proxy |
+| gateway (nginx) | 5090 | Tek giriş noktası — React SPA + API proxy, rate limit, public zone servisi |
 | client (nginx) | — | React SPA |
-| yonetimapi | — | Personel yönetimi, auth, BFF cookie |
+| yonetimapi | — | Personel yönetimi, auth, BFF cookie, RBAC kararı (DB'den) |
 | fileservice | — | Dosya listesi/indirme/yükleme (mTLS) |
 | flotaapi | — | Filo yönetimi |
-| keycloak | — | Kimlik doğrulama (JWT, OIDC) |
-| postgres | — | Veritabanı |
+| opsapi | — | Salt-okunur operasyon/gözlem API'si |
+| clamav | — | Yüklenen dosyalar için fail-closed virüs taraması |
+| keycloak | — | Kimlik doğrulama (JWT, OIDC) — yetki kararı DEĞİL |
+| postgres | — | Veritabanı — `yonetim.role_assignments` yetki kaynağı dahil |
 
 Dışarıya sadece **gateway (5090)** açıktır.
 
@@ -575,11 +577,17 @@ docker compose up --force-recreate -d fileservice yonetimapi flotaapi
 
 **DB tablolar boş:**
 ```bash
-docker exec -i $(docker ps -qf name=postgres) psql -U platform -d platformdb \
-  < db/docker-init/01-schema.sql
-docker exec -i $(docker ps -qf name=postgres) psql -U platform -d platformdb \
-  < db/docker-init/02-seed.sql
+# Sırayla TÜM migration dosyaları uygulanmalı (01'den 08'e, sıra önemli):
+for f in db/docker-init/*.sql; do
+  docker exec -i $(docker ps -qf name=postgres) psql -U platform -d platformdb < "$f"
+done
 ```
+`08-role-assignments.sql` sonrası, Keycloak'taki mevcut rol atamalarını DB'ye aktarmak için ayrıca:
+```bash
+bash tools/backfill-role-assignments.sh
+```
+(Rol yönetimi artık Keycloak admin panelinden değil, `tools/manage-role-assignment.sh` ile yapılır —
+bkz. `MIMARI.md` bölüm 4.)
 
 **NFS mount yok:**
 ```bash

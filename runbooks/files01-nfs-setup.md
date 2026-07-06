@@ -33,6 +33,20 @@ sudo chmod -R 777 /srv/files
 
 Production'da `777` kullanılmaz. Hedef izin modeli `files01-nfs-model.md` içindeki sahiplik/izin tablosudur.
 
+**Public zone dizini (Faz B3, 2026-07-03):** `export/`'ten TAMAMEN ayrı, ikinci bir fiziksel kök dizin
+— kimlik doğrulaması olmadan servis edilen dosyalar (`classification=official` + `zone=public`) için:
+```bash
+sudo mkdir -p /srv/files/export-public
+sudo chown files-writer:files-publishers /srv/files/export-public
+sudo chmod 0770 /srv/files/export-public
+```
+Bu dizin `export/`den ayrı tutulur (savunma derinliği — bir path-traversal hatası bile iki ağacı
+karıştıramaz). Ayrı bir NFS export girişi GEREKMEZ — mevcut export zaten `/srv/files`'in tamamını
+kapsar, yeni alt dizin otomatik görünür olur. `FilesPublisher`'ın `EXPORT_ROOT_PUBLIC` env var'ı
+(`platform-files-publisher.service`) bu dizini gösterir; Gateway'de `/public/` location'ı (kimlik
+doğrulaması yok) bu dizinin salt-okunur bir bind-mount'undan servis eder. Detay: `MIMARI.md` bölüm 6.6,
+`proof/b3-public-private-zone.md`.
+
 ### 3. Health check probe
 
 FileServiceApi bu dosyayı okuyarak storage'ın erişilebilir olduğunu doğrular.
@@ -128,10 +142,12 @@ sudo mount -t nfs -o resvport <FILES_01_IP>:/srv/files /tmp/files01-test
 
 ```
 /srv/files/
-  export/            ← API sunucusu + Mac bu dizini okur (ReadPath + ExportPath)
+  export/            ← API sunucusu + Mac bu dizini okur (ReadPath + ExportPath) — PRIVATE dosyalar
     personnel/
     fleet/
     .probe           ← FileServiceApi health check
+  export-public/     ← Gateway'in ayrı, kimlik-doğrulamasız mount'u — PUBLIC dosyalar (Faz B3)
+                        export/'ten TAMAMEN ayrı fiziksel kök, aynı shard şeması
   staging/           ← Upload geçici alan (StagingPath) — dosyalar burada yazılır, export'a taşınır
     personnel/
   manifests/         ← Migration manifestleri

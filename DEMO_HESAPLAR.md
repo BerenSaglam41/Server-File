@@ -12,6 +12,12 @@ Bu dosya local/demo test ortamı içindir. Üretim bilgisi değildir.
 
 ## Yetki Özeti
 
+**Önemli (2026-07-06 itibarıyla):** Aşağıdaki rol adları (`personnel.files.read.all` vb.) hâlâ
+kullanılıyor ama bu rollerin **kaynağı artık Keycloak DEĞİL** — `yonetim.role_assignments` PostgreSQL
+tablosu. Keycloak sadece kimlik doğrular (bu kullanıcı kim); yetki kararı DB'den gelir. Rol
+atamak/kaldırmak için Keycloak admin paneli yerine `tools/manage-role-assignment.sh` kullanılır. Detay:
+`MIMARI.md` bölüm 4, `PROJECT_STATUS.md`'nin "Faz C1" bölümleri.
+
 | Kullanıcı tipi | Roller | Kapsam |
 |---|---|---|
 | HR | `personnel.files.read.all`, `personnel.files.write.all` | Tüm personeli görür, dosya yükler/arşivler |

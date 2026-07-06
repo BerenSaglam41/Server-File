@@ -540,3 +540,62 @@ Production'a geçmeden önce şu kapılar tamamlanır:
 | Backup | Otomasyon export/manifests/db dump üretir ve sonucu izlenir |
 | Restore test | Periyodik restore testi restore-tests altında hash doğrular |
 | Denial test | API dışı host NFS mount/2049 erişimi alamıyor |
+| Virüs tarama | ClamAV çalışıyor, EICAR reddi test edildi, clamd'e ulaşılamazsa fail-closed (503) |
+| Cross-app izolasyon | Bir app'in başka app'in referansına/dosyasına erişemediği doğrulandı (404, no-leak) |
+| Ticket rate limit | `/files/download/` 30r/s+burst=50 sınırı test edildi, ticket log'da maskeleniyor |
+| Public zone (varsa) | `zone=public` sadece `classification=official` ile kabul ediliyor; private dosya `/public/`den asla erişilemiyor |
+| Yerel yetkilendirme | `Authorization__RoleSource=Db`; Keycloak realm rolleri rollback için duruyor ama karar kaynağı değil |
+
+---
+
+## 10. Uygulama Katmanı Güvenlik Sertleştirmeleri (Faz A/B3/C1, 2026-07-03 — 2026-07-06)
+
+Bu bölüm, yukarıdaki altyapı (NFS/firewall/backup/TLS) sertleştirmelerinden BAĞIMSIZ, uygulama
+katmanında yapılan güvenlik işlerini özetler. Tam gerekçe/test kanıtı `proof/` altında, kronoloji
+`PROJECT_STATUS.md`'de.
+
+### 10.1 Fail-Closed Virüs Tarama (ClamAV)
+
+Her yüklenen dosya, DB'ye yazılmadan/yayınlanmadan ÖNCE ClamAV'e (`clamd` raw INSTREAM protokolü)
+taranır. `clamd`'e ulaşılamazsa dosya **yayınlanmaz** (`503 scan_unavailable`) — "muhtemelen
+temizdir" varsayılmaz. `docker-compose.yml`'de `clamav/clamav-debian:stable` imajı kullanılır
+(`clamav/clamav:stable` DEĞİL — bu, amd64-only, ARM64 UTM VM'lerde çalışmaz). Production'da:
+- ClamAV container'ının imza veritabanının (`freshclam`) düzenli güncellendiği doğrulanmalı.
+- clamd'e bağlantı health check'e dahil edilmeli (mevcut healthcheck zinciri container seviyesinde
+  var, ama clamd'in KENDİ iç sağlığı ayrı izlenmeli).
+
+Kanıt: `proof/faz-a-guvenlik-sertlestirme.md`.
+
+### 10.2 Cross-App Referans/Domain İzolasyonu
+
+FileServiceApi'nin `ResolveAsync`/`GetMetadataAsync`/`GetContentAsync`/`CheckOwnershipAsync`/archive
+endpoint'lerinin HEPSİ, domain-seviyesi policy kontrolüne EK OLARAK, çağıran `app_code`'un o dosyaya
+GERÇEKTEN aktif bir referansı olup olmadığını kontrol eder (`r.AppCode == appCode` filtresi). Aksi
+halde, aynı domain'e izinli iki farklı app (örn. gelecekte eklenecek bir 3. app), birbirinin
+referans/dosyasına erişebilirdi. `azp`/`client_id` JWT claim'leri de birbiriyle tutarlılık kontrolünden
+geçer (ikisi de varsa ve farklıysa token reddedilir). Kanıt: `proof/faz-a-guvenlik-sertlestirme.md`.
+
+### 10.3 Public/Private Storage Zone
+
+Bkz. bölüm 9'daki "Public zone" satırı ve `MIMARI.md` bölüm 6.6. Production'a geçmeden önce:
+- `export-public/` dizininin gerçekten `export/`den fiziksel olarak AYRI olduğu, bir private
+  dosyanın `/public/` yolundan asla erişilemediği doğrulanmalı.
+- Bu özelliğin şu an gerçek bir UI/iş akışı tarafından TETİKLENMEDİĞİ unutulmamalı (sadece altyapı/API
+  seviyesinde var) — production'da kullanılmayacaksa `export-public/` dizini/mount'u hiç oluşturulmayabilir.
+
+### 10.4 Yerel Yetkilendirme Modeli (Faz C1)
+
+Bkz. `MIMARI.md` bölüm 4. Production'a geçmeden önce:
+- `Authorization__RoleSource` her iki serviste de (`yonetimapi`, `opsapi`) `Db` olmalı.
+- `yonetim.role_assignments` tablosunun yedeklenmesi (`platform-backup.service` zaten tüm DB'yi
+  dump'lıyor, ekstra bir adım gerekmez) doğrulanmalı — bu tablo artık yetki kaynağı, kaybı ciddi.
+- Keycloak realm rollerinin/atamalarının SİLİNMESİ bu runbook'un kapsamında DEĞİL — ayrı bir karar
+  noktası (bkz. `PROJECT_STATUS.md` Faz C1 Aşama 3/4).
+- Rol ataması artık Keycloak admin panelinden değil `tools/manage-role-assignment.sh` ile yapılır;
+  bu script'e erişimin (SSH + docker exec yetkisi) kimlerde olduğu production'da netleştirilmeli.
+
+### 10.5 Gateway Rate Limit + Log Maskeleme
+
+Bkz. bölüm 9'daki "Ticket rate limit" satırı ve `MIMARI.md` bölüm 6.5. `/files/download/{ticket}`
+için IP başına `30r/s`+`burst=50`; ticket'ın DB'de tutulan tam değeri hiçbir log dosyasında (access
+log, nginx'in kendi rate-limit diagnostic log'u dahil) görünmez, sadece ilk 8 karakteri.
