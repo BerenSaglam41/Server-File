@@ -131,6 +131,9 @@ services:
       Keycloak__ClientSecret: "yonetimapi-secret-v1"
       Keycloak__FrontendClientId: "frontend-test"
       Keycloak__RequireHttpsMetadata: "false"
+      # Faz C1 — yerel yetkilendirme göçü. Jwt: sadece JWT (rollback). Shadow: ikisi de
+      # hesaplanır, JWT karar verir (Aşama 2). Db: ikisi de hesaplanır, DB karar verir (Aşama 3).
+      Authorization__RoleSource: "Db"
       Mtls__ClientCertPath: "/certs/yonetimapi.crt"
       Mtls__ClientKeyPath:  "/certs/yonetimapi.key"
       Mtls__CaCertPath:     "/certs/ca.crt"
@@ -201,6 +204,8 @@ services:
       Keycloak__MetadataAddress: "http://keycloak:8080/realms/platform/.well-known/openid-configuration"
       Keycloak__RequireHttpsMetadata: "false"
       ConnectionStrings__PlatformDb: "Host=postgres;Database=platformdb;Username=platform;Password=platformpass"
+      # Faz C1 — yerel yetkilendirme göçü (bkz. yonetimapi'nin aynı bayrağı).
+      Authorization__RoleSource: "Db"
       STATUS_ROOT: "/ops/status-files"
       AUDIT_ROOT: "/ops/audit"
       BACKUP_RETAIN: "${BACKUP_RETAIN:-14}"

@@ -2596,6 +2596,37 @@ Aynı 60 senaryo tekrar çalıştırılıp sonuçların birebir aynı kaldığı
 
 ---
 
+## Faz C1 — Yerel Yetkilendirme Modeli — Aşama 3: Cutover (TAMAMLANDI ✅ — 2026-07-06)
+
+Yetki kararının kaynağı GERÇEKTEN Keycloak JWT'den `yonetim.role_assignments`'a çevrildi.
+`docker-compose.yml`'e `Authorization__RoleSource` env var'ı eklendi (`Jwt`/`Shadow`/`Db`) —
+`YonetimApi/Services/PermissionService.cs` ve `OpsApi/Infrastructure/OpsRoleAuthorizationHandler.cs`
+bu flag'e göre son kararı veriyor. **Kademeli deploy:** önce YonetimApi (Shadow→Db), tam test turu,
+sonra ayrı bir turda OpsApi (Shadow→Db) — iki servis aynı anda çevrilmedi. Keycloak realm rolleri
+SİLİNMEDİ (anında rollback: flag'i `Jwt`/`Shadow`'a çevirip restart etmek yeterli).
+
+**Test 1 (davranış değişmedi):** `shadow-parity-test.sh` tekrar çalıştırıldı, **60/60 OK** — Aşama
+2'yle birebir aynı sonuç.
+
+**Test 2/3 (kararın GERÇEKTEN DB'den geldiğinin kanıtı, kullanıcı izniyle, iki ayrı kasıtlı bozulma
+testi):** "60/60 aynı" tek başına yetersizdi (Shadow modda da aynı sonucu verirdi) — P001'in ve ayrıca
+`opsuser01`'in DB rolleri GEÇİCİ revoke edildi (JWT'de hâlâ geçerli, Keycloak'a dokunulmadı):
+- YonetimApi: `p001 -> P001/files` artık **`403`** (Aşama 2'de aynı test `200` vermişti — karar
+  gerçekten değişti).
+- OpsApi: `opsuser01 -> /ops/health` artık **`404`** (mevcut 403→404 bilgi-sızdırmama davranışı
+  korunarak çalıştı).
+
+Her ikisinde de roller hemen geri eklendi, tam test seti tekrar 60/60 temiz doğrulandı.
+
+Tam regresyon: smoke 23/23, safe-test-suite 36/36, backup/restore-test temiz. Tam kanıt:
+`proof/c1-asama3-cutover.md`.
+
+**Sıradaki:** Aşama 4 — `tools/manage-role-assignment.sh` (basit grant/revoke script'i). Keycloak'tan
+`realmRoles`/mapper'ın kaldırılması planın kapsamı DIŞINDA — cutover birkaç test turu sorunsuz kaldıktan
+sonra ayrı bir karar noktası.
+
+---
+
 ## SIRADAKİ ADIM
 
 - **Secret rotasyonu**: Demo parolalar/realm secret'ları prod deploy öncesi değiştirilmeli ve env/secret

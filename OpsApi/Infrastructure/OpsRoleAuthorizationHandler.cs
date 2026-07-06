@@ -11,21 +11,22 @@ public class OpsRoleRequirement : IAuthorizationRequirement
     public OpsRoleRequirement(params string[] allowedRoles) => AllowedRoles = allowedRoles;
 }
 
-// Faz C1 Aşama 2 — shadow mode: KARAR hâlâ JWT'nin realm_access.roles'undan veriliyor
-// (davranış değişmedi, önceki statik HasOpsRole ile birebir aynı mantık). DB-tabanlı
-// (yonetim.role_assignments) sonuç PARALEL hesaplanıp karşılaştırılıyor; uyuşmazlık
-// varsa loglanır, davranışı ETKİLEMEZ. Eski statik fonksiyonun yerine DI-uyumlu bir
-// AuthorizationHandler'a taşındı çünkü RequireAssertion senkron çalışır, DB sorgusu
-// için async bir handler'a ihtiyaç var.
+// Faz C1 — yerel yetkilendirme göçü. RoleSource=Jwt: sadece JWT (rollback). Shadow: ikisi
+// de hesaplanır, JWT karar verir (Aşama 2). Db: ikisi de hesaplanır, DB karar verir
+// (Aşama 3 cutover). Eski statik HasOpsRole fonksiyonunun yerine DI-uyumlu bir
+// AuthorizationHandler'a taşındı çünkü RequireAssertion senkron çalışır, DB sorgusu için
+// async bir handler'a ihtiyaç var.
 public class OpsRoleAuthorizationHandler : AuthorizationHandler<OpsRoleRequirement>
 {
     private readonly NpgsqlDataSource _db;
     private readonly ILogger<OpsRoleAuthorizationHandler> _logger;
+    private readonly string _roleSource;
 
-    public OpsRoleAuthorizationHandler(NpgsqlDataSource db, ILogger<OpsRoleAuthorizationHandler> logger)
+    public OpsRoleAuthorizationHandler(NpgsqlDataSource db, ILogger<OpsRoleAuthorizationHandler> logger, IConfiguration config)
     {
         _db = db;
         _logger = logger;
+        _roleSource = config["Authorization:RoleSource"] ?? "Shadow";
     }
 
     protected override async Task HandleRequirementAsync(
@@ -33,17 +34,25 @@ public class OpsRoleAuthorizationHandler : AuthorizationHandler<OpsRoleRequireme
     {
         var jwtResult = HasOpsRoleViaJwt(context.User, requirement.AllowedRoles);
 
+        if (_roleSource == "Jwt")
+        {
+            if (jwtResult) context.Succeed(requirement);
+            return;
+        }
+
+        var principalId = GetPrincipalId(context.User);
+        var dbResult = jwtResult; // DB sorgusu başarısız olursa (principalId yok/hata) JWT'ye düş
+
         try
         {
-            var principalId = GetPrincipalId(context.User);
             if (!string.IsNullOrEmpty(principalId))
             {
-                var dbResult = await HasOpsRoleViaDbAsync(principalId, requirement.AllowedRoles);
+                dbResult = await HasOpsRoleViaDbAsync(principalId, requirement.AllowedRoles);
                 if (dbResult != jwtResult)
                 {
                     _logger.LogWarning(
-                        "ROLE_SHADOW_MISMATCH principal={PrincipalId} allowedRoles={AllowedRoles} jwt={JwtResult} db={DbResult}",
-                        principalId, string.Join(",", requirement.AllowedRoles), jwtResult, dbResult);
+                        "ROLE_SHADOW_MISMATCH principal={PrincipalId} allowedRoles={AllowedRoles} jwt={JwtResult} db={DbResult} roleSource={RoleSource}",
+                        principalId, string.Join(",", requirement.AllowedRoles), jwtResult, dbResult, _roleSource);
                 }
             }
         }
@@ -51,9 +60,11 @@ public class OpsRoleAuthorizationHandler : AuthorizationHandler<OpsRoleRequireme
         {
             _logger.LogWarning(ex,
                 "ROLE_SHADOW_ERROR allowedRoles={AllowedRoles}", string.Join(",", requirement.AllowedRoles));
+            dbResult = jwtResult;
         }
 
-        if (jwtResult)
+        var effectiveResult = _roleSource == "Db" ? dbResult : jwtResult;
+        if (effectiveResult)
             context.Succeed(requirement);
     }
 

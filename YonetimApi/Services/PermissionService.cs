@@ -13,11 +13,16 @@ public class PersonnelPermissionService : IPermissionService
 {
     private readonly NpgsqlDataSource _db;
     private readonly ILogger<PersonnelPermissionService> _logger;
+    private readonly string _roleSource;
 
-    public PersonnelPermissionService(NpgsqlDataSource db, ILogger<PersonnelPermissionService> logger)
+    public PersonnelPermissionService(NpgsqlDataSource db, ILogger<PersonnelPermissionService> logger, IConfiguration config)
     {
         _db = db;
         _logger = logger;
+        // Faz C1 Aşama 3 — cutover flag'i. "Jwt": sadece JWT (Aşama 1 öncesi davranış, rollback).
+        // "Shadow": ikisi de hesaplanır, JWT karar verir (Aşama 2, varsayılan). "Db": ikisi de
+        // hesaplanır (gözlem kaybolmasın diye), ama artık DB karar verir (Aşama 3 cutover).
+        _roleSource = config["Authorization:RoleSource"] ?? "Shadow";
     }
 
     // permission=personnel.files  action=read   scope=self|team|all
@@ -28,26 +33,26 @@ public class PersonnelPermissionService : IPermissionService
     public Task<bool> CanWriteAsync(ClaimsPrincipal user, string personnelId)
         => HasPermissionAsync(user, "personnel.files", "write", personnelId);
 
-    // Faz C1 Aşama 2 — shadow mode: KARAR hâlâ JWT'den veriliyor (davranış değişmedi).
-    // DB-tabanlı sonuç PARALEL hesaplanıp karşılaştırılıyor; uyuşmazlık varsa loglanır,
-    // davranışı ETKİLEMEZ. Amaç: cutover'dan (Aşama 3) önce DB modelinin JWT ile birebir
-    // aynı sonucu verdiğini gerçek trafikte kanıtlamak.
     private async Task<bool> HasPermissionAsync(
         ClaimsPrincipal user, string permission, string action, string targetId)
     {
+        if (_roleSource == "Jwt")
+            return await HasPermissionViaJwtAsync(user, permission, action, targetId);
+
         var jwtResult = await HasPermissionViaJwtAsync(user, permission, action, targetId);
+        var ownId = GetPersonnelId(user);
+        bool dbResult = jwtResult; // DB sorgusu başarısız olursa (ownId yok/hata) JWT'ye düş
 
         try
         {
-            var ownId = GetPersonnelId(user);
             if (!string.IsNullOrEmpty(ownId))
             {
-                var dbResult = await HasPermissionViaDbAsync(ownId, permission, action, targetId);
+                dbResult = await HasPermissionViaDbAsync(ownId, permission, action, targetId);
                 if (dbResult != jwtResult)
                 {
                     _logger.LogWarning(
-                        "ROLE_SHADOW_MISMATCH principal={PrincipalId} permission={Permission} action={Action} target={TargetId} jwt={JwtResult} db={DbResult}",
-                        ownId, permission, action, targetId, jwtResult, dbResult);
+                        "ROLE_SHADOW_MISMATCH principal={PrincipalId} permission={Permission} action={Action} target={TargetId} jwt={JwtResult} db={DbResult} roleSource={RoleSource}",
+                        ownId, permission, action, targetId, jwtResult, dbResult, _roleSource);
                 }
             }
         }
@@ -56,9 +61,10 @@ public class PersonnelPermissionService : IPermissionService
             _logger.LogWarning(ex,
                 "ROLE_SHADOW_ERROR permission={Permission} action={Action} target={TargetId}",
                 permission, action, targetId);
+            dbResult = jwtResult; // hata durumunda JWT'ye düş (fail-open değil, fail-to-previous-known-good)
         }
 
-        return jwtResult;
+        return _roleSource == "Db" ? dbResult : jwtResult;
     }
 
     // Kural: all → team → self sırasıyla kontrol edilir.
