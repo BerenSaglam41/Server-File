@@ -2422,9 +2422,9 @@ tamamlamaya karar verdi. Aşamalı bir plan çıkarıldı (Faz A/B/C), Faz A tam
 Tam regresyon (smoke 23/23, safe-test-suite 36/36, backup/restore) her adımda tekrar çalıştırıldı.
 Tam kanıt: `proof/faz-a-guvenlik-sertlestirme.md`.
 
-**Sıradaki:** Faz B (referans-bazlı archive endpoint'i + YAGNI kararları — `app_clients` tablosu,
-`storage_backend_id`/`zone` kolonları, public/private zone kullanıcı onayı bekliyor), Faz C (yerel
-yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım konuşması gerektirir, henüz başlanmadı).
+**Sıradaki (2026-07-06 sonrası güncellendi):** Faz B ve Faz C1 (yerel yetkilendirme modeli) o zamandan
+beri **tamamlandı** — bkz. aşağıdaki ilgili bölümler. Bu not artık geçersiz, sadece kronolojik iz için
+tutuluyor.
 
 ### Yan Olay: Git Deposu Bozulması ve Kurtarma (2026-07-03)
 
@@ -2499,11 +2499,11 @@ sonrasında temizlendi. Tam regresyon (smoke 23/23, safe-test-suite 36/36) temiz
 
 Tam kanıt: `proof/b1-referans-bazli-archive.md`.
 
-**Sıradaki (2026-07-03 sonrası güncellendi):** Public/private zone kullanıcı kararıyla **B3 olarak
-tamamlandı** (bkz. aşağıdaki bölüm) — aşağıdaki not artık geçersiz. Kalan YAGNI kararları: `app_clients`
-tablosu, `storage_backend_id`/`storage_key_version` kolonları (hâlâ tek storage backend olduğu için
-ertelendi). Faz C (yerel yetkilendirme modeli + Authorization Code/PKCE — ayrı tasarım konuşması
-gerektirir) henüz başlanmadı.
+**Sıradaki (2026-07-06 sonrası güncellendi):** Public/private zone kullanıcı kararıyla **B3 olarak
+tamamlandı**, yerel yetkilendirme modeli de **C1 olarak (4 aşamada) tamamlandı** (bkz. aşağıdaki
+bölümler) — bu not artık geçersiz. Kalan YAGNI kararları: `app_clients` tablosu,
+`storage_backend_id`/`storage_key_version` kolonları (hâlâ tek storage backend olduğu için ertelendi).
+Faz C2 (Authorization Code + PKCE — ayrı tasarım konuşması gerektirir) henüz başlanmadı.
 
 ---
 
@@ -2624,6 +2624,33 @@ Tam regresyon: smoke 23/23, safe-test-suite 36/36, backup/restore-test temiz. Ta
 **Sıradaki:** Aşama 4 — `tools/manage-role-assignment.sh` (basit grant/revoke script'i). Keycloak'tan
 `realmRoles`/mapper'ın kaldırılması planın kapsamı DIŞINDA — cutover birkaç test turu sorunsuz kaldıktan
 sonra ayrı bir karar noktası.
+
+---
+
+## Faz C1 — Yerel Yetkilendirme Modeli — Aşama 4: Rol Yönetim Scripti (TAMAMLANDI ✅ — 2026-07-06)
+
+**Faz C1'in TÜM aşamaları tamamlandı.** `tools/manage-role-assignment.sh` eklendi (`grant`/`revoke`/
+`list`, kapsam bilinçli minimal — tam bir CRUD/yönetim UI'ı değil).
+
+**Bulunan bug:** İlk tasarım `psql -v var=... -c "... :'var' ..."` kullanıyordu — canlı testte
+`ERROR: syntax error at or near ":"` alındı. Kök neden: psql'in `:'var'` substitution'ı **sadece
+STDIN/script modunda çalışıyor, `-c` modunda çalışmıyor** (PostgreSQL 16.14'te doğrulandı). SQL,
+heredoc ile STDIN'e gönderilecek şekilde düzeltildi (güvenlik — parametrize sorgu, string
+interpolation yok — korunarak).
+
+**Test — C1'in asıl vaat ettiği faydanın kanıtı:** P022 ile TEK BİR gerçek login yapılıp cookie alındı,
+test boyunca **yeniden login OLMADAN** aynı cookie tekrar kullanıldı: başlangıçta P001'e erişim `403`
+→ script ile `personnel.files.read.all` verildi (Keycloak'a dokunmadan) → **AYNI cookie ile artık
+`200`** (izin anında etkili) → script ile revoke edildi → **AYNI cookie ile tekrar `403`** (erişim
+anında kesildi) → P022'nin kendi kaydına erişimi (`self` scope) etkilenmeden `200` kaldı. Bu, "yetki
+değişikliği için Keycloak realm JSON güncelleme/reimport veya kullanıcının yeniden login olması
+gerekmiyor" iddiasının somut kanıtı.
+
+Tam regresyon: smoke 23/23, safe-test-suite 36/36, 60 senaryolu shadow-parity-test tekrar 60/60,
+backup/restore-test temiz. Tam kanıt: `proof/c1-asama4-rol-yonetim-scripti.md`.
+
+**Bilinçli kalan sınır:** Keycloak'tan `realmRoles`/rol mapper'ının tamamen kaldırılması bu planın
+kapsamı DIŞINDA bırakıldı (kullanıcının açık kararı) — ayrı bir karar noktası olarak duruyor.
 
 ---
 
