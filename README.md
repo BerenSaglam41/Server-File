@@ -51,8 +51,6 @@ paneline değil, `tools/manage-role-assignment.sh`'a bakın.
   sertleştirme (`production-hardening.md`), gözlemlenebilirlik planı (`observability-plan.md`).
 - **`proof/`** — her önemli özellik/güvenlik değişikliği için gerçek test kanıtları (canlı komutlar
   ve çıktılar) — "çalışıyor" iddialarının arkasındaki kanıt burada.
-- **`PROJE/`** — hedef/gelecek mimari üzerine tartışma dokümanları (mevcut implementasyonun DEĞİL,
-  olası genişleme yönlerinin belgeleri).
 - **`tools/`** — deploy, test ve operasyon script'leri (`server-smoke-test.sh`,
   `server-safe-test-suite.sh`, `manage-role-assignment.sh`, yedekleme araçları).
 
